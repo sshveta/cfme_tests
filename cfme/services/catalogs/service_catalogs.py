@@ -4,14 +4,13 @@ from functools import partial
 from navmazing import NavigateToSibling, NavigateToAttribute
 
 import cfme.fixtures.pytest_selenium as sel
-from cfme.web_ui import (
-    accordion, flash, form_buttons, Form, Input, Select, match_location, toolbar as tb, PagedTable)
+from cfme.web_ui import (accordion, flash, form_buttons, Form, Input, Select,
+    match_location, toolbar as tb, PagedTable)
 from selenium.common.exceptions import NoSuchElementException
 from utils.appliance.implementations.ui import CFMENavigateStep, navigate_to, navigator
 from utils.appliance import Navigatable
 from utils.update import Updateable
 from utils.pretty import Pretty
-from utils.wait import wait_for
 
 order_button = "//button[@title='Order this Service']"
 
@@ -41,6 +40,7 @@ dialog_form = Form(
         ('default_select_value', Select("//select[@id='service_level']"))
     ])
 
+
 match_page = partial(match_location, title='Catalogs', controller='catalog')
 
 
@@ -59,8 +59,8 @@ class ServiceCatalogs(Updateable, Pretty, Navigatable):
             stack_form.fill(self.stack_data)
         if self.dialog_values:
             dialog_form.fill(self.dialog_values)
-            sel.sleep(5)
         sel.click(form_buttons.submit)
+        # TO DO - needs to be reworked and remove sleep
         sel.sleep(5)
         flash.assert_success_message("Order Request was Submitted")
 
@@ -73,8 +73,7 @@ class ServiceCatalogsAll(CFMENavigateStep):
         return match_page(summary='All Services')
 
     def step(self):
-        from cfme.web_ui.menu import nav
-        nav._nav_to_fn('Services', 'Catalogs')(None)
+        self.parent_view.navigation.select('Services', 'Catalogs')
         tree = accordion.tree('Service Catalogs')
         tree.click_path('All Services')
 
