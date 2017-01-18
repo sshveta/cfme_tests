@@ -12,7 +12,6 @@ from cfme.services import requests
 from utils import testgen
 from utils.log import logger
 from utils.wait import wait_for
-from utils.blockers import BZ
 
 
 pytestmark = [
@@ -89,7 +88,6 @@ def catalog_item(provider, provisioning, vm_name, tagcontrol_dialog, catalog):
 
 
 @pytest.mark.tier(2)
-@pytest.mark.meta(blockers=[BZ(1382765, forced_streams=["5.6", "5.7", "upstream"])])
 def test_tagdialog_catalog_item(provider, setup_provider, catalog_item, request):
     """Tests tag dialog catalog item
     Metadata:
@@ -103,7 +101,7 @@ def test_tagdialog_catalog_item(provider, setup_provider, catalog_item, request)
     }
     service_catalogs = ServiceCatalogs(service_name=catalog_item.name, dialog_values=dialog_values)
     service_catalogs.order()
-    logger.info('Waiting for cfme provision request for service %s', catalog_item.name)
+    logger.info('Waiting for cfme provision request for service {}'.format(catalog_item.name))
     row_description = catalog_item.name
     cells = {'Description': row_description}
     row, __ = wait_for(requests.wait_for_request, [cells, True],
