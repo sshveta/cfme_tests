@@ -14,6 +14,7 @@ from utils.browser import ensure_browser_open
 from utils.log import logger
 from utils.wait import wait_for
 
+
 pytestmark = [
     pytest.mark.usefixtures("vm_name", "catalog_item"),
     pytest.mark.meta(server_roles="+automate"),
@@ -48,7 +49,7 @@ def myservice(setup_provider, provider, catalog_item, request):
         version.LOWEST: catalog_item.provisioning_data["vm_name"] + '_0001',
         '5.7': catalog_item.provisioning_data["vm_name"] + '0001'})
     catalog_item.create()
-    service_catalogs = ServiceCatalogs(catalog_item.name)
+    service_catalogs = ServiceCatalogs(catalog_item.catalog, catalog_item.name)
     service_catalogs.order()
     logger.info('Waiting for cfme provision request for service %s', catalog_item.name)
     row_description = catalog_item.name
@@ -68,8 +69,6 @@ def test_retire_service(provider, myservice, register_event):
     Metadata:
         test_flag: provision
     """
-    register_event(target_type='Service', target_name=myservice.service_name,
-                   event_type='service_retired')
     myservice.retire()
 
 
@@ -83,7 +82,7 @@ def test_retire_service_on_date(myservice):
     myservice.retire_on_date(dt)
 
 
-def test_crud_set_ownership_and_edit_tags(myservice):
+def test_crud_set_ownership_and_edit_tags():
     """Tests my service crud , edit tags and ownership
 
     Metadata:
@@ -91,8 +90,7 @@ def test_crud_set_ownership_and_edit_tags(myservice):
     """
     myservice.set_ownership("Administrator", "EvmGroup-administrator")
     myservice.edit_tags("Cost Center *", "Cost Center 001")
-    myservice.update(updates={'service_name': myservice.service_name + '_updated',
-                              'description': 'Updated service description'})
+    myservice.update({'description': 'Updated service description'})
     myservice.delete()
 
 
