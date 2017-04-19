@@ -6,6 +6,7 @@ from utils.update import Updateable
 from utils.pretty import Pretty
 from utils.appliance import Navigatable
 from utils.appliance.implementations.ui import navigator, CFMENavigateStep, navigate_to
+from cfme.fixtures import pytest_selenium as sel
 from cfme.base import Server
 
 from . import ServicesCatalogView
@@ -102,6 +103,7 @@ class ServiceCatalogs(Updateable, Pretty, Navigatable):
             view.fill(self.dialog_values)
         view.submit_button.click()
         # Request page is displayed after this hence not asserting for view
+        sel.sleep(5)
         view.flash.assert_success_message("Order Request was Submitted")
 
 
