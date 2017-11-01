@@ -21,7 +21,7 @@ pytestmark = [
     pytest.mark.usefixtures('uses_infra_providers'),
     test_requirements.ssui,
     pytest.mark.long_running,
-    pytest.mark.ignore_stream("upstream", "5.9")
+    pytest.mark.ignore_stream("upstream", "5.9"),
 ]
 
 
