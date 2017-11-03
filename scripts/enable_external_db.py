@@ -12,22 +12,20 @@ Example usage:
   use region 1 and default credentials (from yaml):
 
     enable_external_db.py 10.0.0.1 20.0.0.1 --database cfme_db --region 1
+
 """
 
 import argparse
-import os
 import sys
 
-from utils import datafile
-from utils.conf import credentials
-from utils.randomness import generate_random_string
-from utils.ssh import SSHClient
+from cfme.utils.appliance import IPAppliance
+from cfme.utils.conf import credentials
 
 
 def main():
     parser = argparse.ArgumentParser(epilog=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('address',
+    parser.add_argument('address', nargs='?', default=None,
         help='hostname or ip address of target appliance')
     parser.add_argument('db_address',
         help='hostname or ip address of external database')
@@ -39,44 +37,19 @@ def main():
         help='username for external database')
     parser.add_argument('--password', default=credentials['database']['password'],
         help='password for external database')
-
     args = parser.parse_args()
 
-    ssh_kwargs = {
-        'username': credentials['ssh']['username'],
-        'password': credentials['ssh']['password'],
-        'hostname': args.address
-    }
-    rbt_repl = {
-        'miq_lib': '/var/www/miq/lib',
-        'host': args.db_address,
-        'database': args.database,
-        'region': args.region,
-        'username': args.username,
-        'password': args.password
-    }
+    print('Initializing Appliance External DB')
+    ip_a = IPAppliance(args.address)
+    status, out = ip_a.db.enable_external(args.db_address, args.region, args.database,
+        args.username, args.password)
 
-    # Find and load our rb template with replacements
-    base_path = os.path.dirname(__file__)
-    rbt = datafile.data_path_for_filename(
-        'enable-external-db.rbt', base_path)
-    rb = datafile.load_data_file(rbt, rbt_repl)
-
-    # Init SSH client and sent rb file over to /tmp
-    remote_file = '/tmp/%s' % generate_random_string()
-    client = SSHClient(**ssh_kwargs)
-    client.put_file(rb.name, remote_file)
-
-    # Run the rb script, clean it up when done
-    print 'Initializing Appliance External DB'
-    status, out = client.run_command('ruby %s' % remote_file)
-    client.run_command('rm %s' % remote_file)
     if status != 0:
-        print 'Enabling DB failed with error:'
-        print out
+        print('Enabling DB failed with error:')
+        print(out)
         sys.exit(1)
     else:
-        print 'DB Enabled, evm watchdog should start the UI shortly.'
+        print('DB Enabled, evm watchdog should start the UI shortly.')
 
 
 if __name__ == '__main__':

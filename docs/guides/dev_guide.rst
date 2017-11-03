@@ -84,20 +84,57 @@ We also do a few things that aren't explicitly called out in PEP 8:
   width of 100 characters. As a result, our maximum line length is 100 characters,
   rather than 80.
 
+* Use parentheses ``()`` for line continuation::
+
+    # in imports
+    import (module1, module2, module3, module4,
+        module5)
+
+        or
+
+    import (
+        module1, module2, module3,
+        module4)
+
+        or
+
+    import (
+        module1,
+        module2,
+        module3
+    )
+
+    # in long strings without multiple lines
+    very_long_string = (
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt "
+        "ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
+        "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in "
+        "reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur "
+        "sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id "
+        "est laborum."
+    )
+
+* Docstrings can be used in strings with multiple lines::
+
+    string_with_multiple_lines = """Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+    eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis 
+    nostrud exercitation"""
+
+
 * When wrapping blocks of long lines, indent the trailing lines once, instead of
   indenting to the opening bracket. This helps when there are large blocks of long
   lines, to preserve some readability::
 
-    _really_really_long_locator_name = (True, 'div > tr > td > a[title="this \
-        is just a little too long"]')
-    _another_really_super_long_locator_name = (True, 'div > tr > td > \
-        a[title="this is getting silly now"]')
+    _really_really_long_locator_name = (True, ('div > tr > td > a[title="this '
+        'is just a little too long"]'))
+    _another_really_super_long_locator_name = (True, ('div > tr > td > '
+        'a[title="this is getting silly now"]'))
 
 - When wrapping long conditionals, indent trailing lines twice, just like with
   function names and any other block statement (they usually end with colons)::
 
-    if this_extremely_long_variable_name_takes_up_the_whole_line and \
-            you_need_to_wrap_your_conditional_to_the_next_line:
+    if (this_extremely_long_variable_name_takes_up_the_whole_line and
+            you_need_to_wrap_your_conditional_to_the_next_line):
         # Two indents help clearly separate the wrapped conditional
         # from the following code.
 
@@ -167,93 +204,91 @@ We also do a few things that aren't explicitly called out in PEP 8:
     from os import environ
     from random import choice
 
+* We require ``print`` statements be written in Python 3.0 compatible format, that is
+  encased in parentheses::
+
+    print("Hello")
+
+* We also use the newer ``.format`` style for string formatting and will no longer be accepting
+  the older ``%s`` format. The new format offers many more enhancements::
+
+    a = "new"
+    b = 2
+    
+    "a {} string for {}".format(a, b)
+
+    "{name} is {emotion}".format(name="john", emotion="happy")
+
+    "{0} and another {0}".format("something")
+
+* There is a one exception for string formatting. According
+  `<https://docs.python.org/3/howto/logging.html#optimization>`_ use old style ``%s``,
+  but without the actual ``%`` formatting operation::
+
+    from cfme.utils.log import logger
+
+    logger.info("Some message %s", some_string)
+
 General Notes
 """""""""""""
 
-* Avoid using ``time.sleep`` as much as possible to workaround quirks in the UI.
-  There is a ``utils.wait.wait_for`` utility that can be used to wait for
+* Avoid using :py:func:`time.sleep` as much as possible to workaround quirks in the UI.
+  There is a :py:func:`cfme.utils.wait.wait_for` utility that can be used to wait for
   arbitrary conditions. In most cases there is some DOM visible change on the page
   which can be waited for.
-* Avoid using ``time.sleep`` for waiting for changes to happen outside of the UI.
+* Avoid using :py:func:`time.sleep` for waiting for changes to happen outside of the UI.
   Consider using tools like mgmt_system to probe the external systems for
-  conditions for example and tie it in with a ``wait_for`` as discussed above.
+  conditions for example and tie it in with a :py:func:`cfme.utils.wait.wait_for` as discussed above.
 * If you feel icky about something you've written but don't know how to make
   it better, ask someone. It's better to have it fixed before submitting it as
   a pull request ;)
+* Use :py:mod:`six` library to write Python 3 compatible code.
 
 Other useful code style guidelines:
 
 * `PEP 20 - The Zen of Python <http://www.python.org/dev/peps/pep-0020>`_
 * `PEP 257 - Docstring Conventions <http://www.python.org/dev/peps/pep-0257>`_
 
-cfme_tests
-----------
+UI modeling
+-----------
 
-With regard to design, if a component can be shared between different pages (trees, accordions,
-etc.), then it should be turned into a region. This is a standalone bit of code that models just
-a small portion of a page. From there, these regions can be composited into a page object. Page
-objects themselves should expose properties that represent items on the page, and also any
-"services" that the page has. So, rather than write a test with 'Fill in username, fill in
-password click submit', you would create a 'login' method on the page that takes the username
-and password as an argument. This will shield the tests from changing implementation of that
-login method. If you want pass something different, create a new method, like
-``login_with_enter_key``, so as to allow other variations of the service.
-
-If an action results in navigation to a new page, and that page will always be known, the
-action should return the page that results.
-
-The elements and methods exposed on a page will result from tests written against that page.
-If there is a specific test that you are working on, write the test first, modeling the page
-as you go (if needed) to provide the necessary functionality. Developers are not expected or
-encourage to model pages without a test that uses the modeling.
+For a guide on how to model the UI representation in our framework, please see :doc:`ui_modeling`.
 
 Layout
 ^^^^^^
 
-`cfme_tests/`
+``cfme_tests/``
 
-* `cfme/` The new selenium interface framework currently (**In Heavy Development**).
+* ``cfme/`` Page modeling and tests
 
-  * `web_ui/` The new web framework being developed (**In Heavy Development**)
-  * `fixtures/` The new fixtures (**In Heavy Development**)
+  * ``web_ui/`` The new web framework
+  * ``fixtures/`` The new fixtures
+  * ``tests/`` Tests container
+  * ``utils/`` Utility functions that can be called inside our outside the
+    test context. Generally, util functions benefit from having a related test
+    fixture that exposes the utility to the tests. Modules in this directory
+    will be auto loaded.
 
-* `pages/` Top-level pages container. The structure of this directory should mimic
-  the layout of the CFME UI as much as possible.
+  	* ``tests/`` Unit tests for utils
 
-* `tests/` Top-level tests container
-
-  * `appliance/` Appliance tests, generally using tools other than the UI to
-    inspect appliance internals, like verify installed packages or required
-    service states
-  * `scenario/` Large test scenarios, representing complicated setup and teardown
-    workflows with interdependent tests
-  * `ui/` General UI tests, testing specific functional units of behavior
-
-* `data/` Test data. The structure of this directory should match the
-  structure under `tests/`, with data files for tests in the same relative
+* ``conf/`` Place for configuration files
+* ``data/`` Test data. The structure of this directory should match the
+  structure under ``cfme/tests/``, with data files for tests in the same relative
   location as the test itself.
 
-  * For example, data files for `tests/ui/test_ui_widgets.py` could go into
-    `data/ui/test_ui_widgets/`.
+  * For example, data files for ``cfme/tests/dashboard/test_widgets.py`` could go into
+    ``data/dashboard/test_widgets/``.
 
-* `fixtures/` py.test fixtures that can be used by any test. Modules in
+* ``fixtures/`` py.test fixtures that can be used by any test. Modules in
   this directory will be auto loaded.
-* `markers/` py.test markers that can be used by any test. Modules in this
+* ``markers/`` py.test markers that can be used by any test. Modules in this
   directory will be auto loaded.
-* `utils/` Utility functions that can be called inside our outside the
-  test context. Generally, util functions benefit from having a related test
-  fixture that exposes the utility to the tests. Modules in this directory
-  will be auto loaded.
-* `db/` The 'db' module provides access to an appliance's database, as
-  well as convenience mappings for model to table names.
-* `scripts/` Useful scripts for QE developers that aren't used during
+* ``cfme/metaplugins/`` Plugins loaded by ``@pytest.mark.meta``. Further informations in
+  :py:mod:`markers.meta`
+
+* ``scripts/`` Useful scripts for QE developers that aren't used during
   a test run
-
-Writing Pages
-^^^^^^^^^^^^^
-
-Information on developing page models, as well as a full example can be found in the
-:doc:`page_development` section.
+* ``sprout/`` Here lives the Sprout appliance tool.
 
 Writing Tests
 ^^^^^^^^^^^^^
@@ -262,9 +297,6 @@ Tests in `cfme_tests` have the following properties:
 
 * They pass on a freshly deployed appliance with no configuration beyond the
   defaults (i.e. tests do their own setup and teardown).
-* They never directly access a page's ``testsetup`` attribute, or call
-  selenium methods. Instead, methods defined on the page objects will carry
-  out the required behavior.
 * Where possible, they strive to be idempotent to facilitate repeated testing
   and debugging of failing tests. (Repeatable is Reportable)
 * Where possible, they try to clean up behind themselves. This not only helps

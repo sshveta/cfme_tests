@@ -9,34 +9,101 @@ Members of this module are available in the the pytest.sel namespace, e.g.::
     pytest.sel.click(locator)
 
 :var ajax_wait_js: A Javascript function for ajax wait checking
+:var class_selector: Regular expression to detect simple CSS locators
 """
+from HTMLParser import HTMLParser
 from time import sleep
-from traceback import format_exc
+from xml.sax.saxutils import quoteattr, unescape
+from collections import Iterable, namedtuple
+from contextlib import contextmanager
+from textwrap import dedent
 import json
-
-import ui_navigate
-from selenium.common.exceptions import (NoSuchElementException,
-                                        UnexpectedAlertPresentException,
-                                        NoSuchAttributeException)
+import re
+from selenium.common.exceptions import \
+    (NoSuchAttributeException,
+     NoSuchElementException, NoAlertPresentException, UnexpectedAlertPresentException,
+     MoveTargetOutOfBoundsException, WebDriverException,
+     StaleElementReferenceException)
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.remote.file_detector import LocalFileDetector, UselessFileDetector
 from selenium.webdriver.remote.webelement import WebElement
-
+from selenium.webdriver.support.select import Select as SeleniumSelect
 from multimethods import singledispatch, multidispatch
 
-import pytest
-from cfme import exceptions
-from utils import conf
-from utils.browser import browser, ensure_browser_open
-from utils.log import logger
+import base64
 
-VALUE = 'val'
-TEXT = 'txt'
+from cfme import exceptions, js
+from fixtures.pytest_store import store
+from cfme.utils import version
+from cfme.utils.browser import browser, ensure_browser_open
+from cfme.utils.path import log_path
+from cfme.utils.log import logger
+from cfme.utils.wait import wait_for
+from cfme.utils.pretty import Pretty
+from cfme.utils.deprecation import removed_in_fw30
+
+from threading import local
+_thread_local = local()
+_thread_local.ajax_timeout = 30
+
+class_selector = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9]*)?(?:[#.][a-zA-Z0-9_-]+)+$")
+removed = removed_in_fw30(message="it is replaced by the browser endpoint api")
+
+urls = []
 
 
+# Monkeypatching WebElement
+if "_old__repr__" not in globals():
+    _old__repr__ = WebElement.__repr__
+
+
+def __repr__(self):
+    if hasattr(self, "_source_locator"):
+        this, parent = self._source_locator
+        if parent:
+            return "element({}, root={})".format(repr(this), repr(parent))
+        else:
+            return "element({})".format(repr(this))
+    else:
+        return _old__repr__(self)
+
+
+if WebElement.__repr__ is not __repr__:
+    WebElement.__repr__ = __repr__
+
+
+class ByValue(Pretty):
+    pretty_attrs = ['value']
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return self.value == other.value
+
+    def __str__(self):
+        return str(self.value)
+
+
+class ByText(Pretty):
+    pretty_attrs = ['text']
+
+    def __init__(self, text):
+        self.text = text
+
+    def __str__(self):
+        return str(self.text)
+
+    def __eq__(self, other):
+        return self.text == other.text
+
+
+@removed
 @singledispatch
-def elements(o, root=None):
+def elements(o, **kwargs):
     """
     Convert object o to list of matching WebElements. Can be extended by registering the type of o
     to this function.
@@ -46,32 +113,135 @@ def elements(o, root=None):
 
     Returns: A list of WebElement objects
     """
-    return elements(o.locate(), root=root)  # if object implements locate(), try to get elements
-    # from that locator.  If it doesn't implement locate(), we're in trouble so
+    check_visibility = kwargs.pop("check_visibility", True)
+    if hasattr(o, "locate"):
+        els = elements(o.locate(), **kwargs)
+        if check_visibility:
+            return [e for e in els if is_displayed(e)]
+        else:
+            return els
+    elif callable(o):
+        els = elements(o(), **kwargs)
+        if check_visibility:
+            return [e for e in els if is_displayed(e)]
+        else:
+            return els
+    else:
+        raise TypeError("Unprocessable type for elements({}) -> class {} (kwargs: {})".format(
+            str(repr(o)), o.__class__.__name__, str(repr(kwargs))
+        ))
+    # If it doesn't implement locate() or __call__(), we're in trouble so
     # let the error bubble up.
 
 
 @elements.method(basestring)
-def _s(s, root=None):
-    """Assume string is an xpath locator"""
-    parent = root or browser()
-    return parent.find_elements_by_xpath(s)
+def _s(s, **kwargs):
+    """Detect string and process it into locator.
+
+    If the string starts with # or ., it is considered as CSS selector.
+    If the string is in format tag#id.class2 it is considered as CSS selector format too.
+    No other forms of CSS selectors are supported (use tuples if you really want to)
+    Otherwise it is assumed it is an XPATH selector.
+
+    If the root element is actually multiple elements, then the locator is resolved for each
+    of root nodes.
+
+    Result: Flat list of elements
+    """
+    s = s.strip()
+    css = class_selector.match(s)
+    if css is not None:
+        return elements((By.CSS_SELECTOR, css.group()), **kwargs)
+    else:
+        return elements((By.XPATH, s), **kwargs)
 
 
 @elements.method(WebElement)
 def _w(webelement, **kwargs):
-    """Return a 1-item list of webelements"""
+    """Return a 1-item list of webelements
+
+    If the root element is actually multiple elements, then the locator is resolved for each
+    of root nodes.
+
+    Result: Flat list of elements
+    """
     # accept **kwargs to deal with root if it's passed by singledispatch
     return [webelement]
 
 
 @elements.method(tuple)
 def _t(t, root=None):
-    """Assume tuple is a 2-item tuple like (By.ID, 'myid')"""
-    parent = root or browser()
-    return parent.find_elements(*t)
+    """Assume tuple is a 2-item tuple like (By.ID, 'myid').
+
+    Handles the case when root= locator resolves to multiple elements. In that case all of them
+    are processed and all results are put in the same list."""
+    result = []
+    for root_element in (elements(root) if root is not None else [ensure_browser_open()]):
+        # 20140920 - dajo - hack to get around selenium e is null bs
+        count = 0
+        while count < 8:
+            count += 1
+            try:
+                result += root_element.find_elements(*t)
+                break
+            except Exception as e:
+                logger.info('Exception detected: %s', str(e))
+                sleep(0.25)
+                if count == 8:
+                    result += root_element.find_elements(*t)
+    # Monkey patch them
+    for elem in result:
+        elem._source_locator = (t, root)
+    return result
 
 
+@elements.method(list)
+@elements.method(set)
+def _l(l, **kwargs):
+    """If we pass an iterable (non-tuple), just find everything relevant from it by all locators."""
+    if not l:
+        return []
+    found = reduce(lambda a, b: a + b, map(lambda loc: elements(loc, **kwargs), l))
+    seen = set([])
+    result = []
+    # Multiple locators can find the same elements, so let's filter
+    for item in found:
+        if item in seen:
+            continue
+        result.append(item)
+        seen.add(item)
+    return result
+
+
+@elements.method(dict)
+def _d(l, **kwargs):
+    """Resolve version-specific locators."""
+    return elements(version.pick(l), **kwargs)
+
+
+def get_rails_error():
+    """Get displayed rails error. If not present, return None"""
+    if is_displayed(
+            "//body[./h1 and ./p and ./hr and ./address]", _no_deeper=True):
+        try:
+            title = text("//body/h1", _no_deeper=True)
+            body = text("//body/p", _no_deeper=True)
+        except NoSuchElementException:  # Just in case something goes really wrong
+            return None
+        return "{}: {}".format(title, body)
+    elif is_displayed(
+            "//h1[normalize-space(.)='Unexpected error encountered']", _no_deeper=True):
+        try:
+            error_text = text(
+                "//h1[normalize-space(.)='Unexpected error encountered']"
+                "/following-sibling::h3[not(fieldset)]", _no_deeper=True)
+        except NoSuchElementException:  # Just in case something goes really wrong
+            return None
+        return error_text
+    return None
+
+
+@removed
 def element(o, **kwargs):
     """
     Convert o to a single matching WebElement.
@@ -79,66 +249,273 @@ def element(o, **kwargs):
     Args:
         o: An object to be converted to a matching web element, expected string, WebElement, tuple.
 
+    Keywords:
+        _no_deeper: Whether this call of the function can call for something that can retrieve
+            elements too. Recursion protection.
+
     Returns: A WebElement object
 
     Raises:
         NoSuchElementException: When element is not found on page
     """
+    no_deeper = kwargs.pop("_no_deeper", False)
     matches = elements(o, **kwargs)
+
     if not matches:
+        if (not no_deeper):
+            r_e = get_rails_error()
+            if r_e is not None:
+                raise exceptions.CFMEExceptionOccured(
+                    "Element {} not found on page because the following Rails error happened:\n{}"
+                    .format(str(o), r_e))
         raise NoSuchElementException("Element {} not found on page.".format(str(o)))
     return matches[0]
 
 
-def wait_until(f, msg="Webdriver wait timed out"):
+@removed
+def wait_until(f, msg="Webdriver wait timed out", timeout=120.0):
+    """This used to be a wrapper around WebDriverWait from selenium.
+
+    Now it is just compatibility layer using :py:func:`utils.wait.wait_for`
     """
-    Wrapper around WebDriverWait from selenium
+    return wait_for(lambda: f(ensure_browser_open()), num_sec=timeout, message=msg, delay=0.5)
+
+
+@removed
+def in_flight(script):
+    """Check remaining (running) ajax requests
+
+    The element visibility check is complex because lightbox_div invokes visibility
+    of spinner_div although it is not visible.
+
+    Args:
+        script: Script (string) to execute
+
+    Returns:
+        Dictionary of js-related keys and booleans as its values, depending on status.
+        The keys are: ``jquery, prototype, miq, spinner and document``.
+        The values are: ``True`` if running, ``False`` otherwise.
     """
-    WebDriverWait(browser(), 120.0).until(f, msg)
+    try:
+        return execute_script(script)
+    except UnexpectedAlertPresentException:
+        raise
+    except Exception:
+        sleep(0.5)
+        return execute_script(script)
 
 
-def _nothing_in_flight(s):
-    in_flt = s.execute_script(ajax_wait_js)
-    return in_flt == 0
-
-
+@removed
 def wait_for_ajax():
     """
-    Waits unti lall ajax timers are complete, in other words, waits until there are no
+    Waits until all ajax timers are complete, in other words, waits until there are no
     more pending ajax requests, page load should be finished completely.
+
+    Raises:
+        TimedOutError: when ajax did not load in time
     """
-    wait_until(_nothing_in_flight, "Ajax wait timed out")
+
+    execute_script("""
+        try {
+            angular.element('error-modal').hide();
+        } catch(err) {
+        }""")
+
+    _thread_local.ajax_log_msg = ''
+
+    def _nothing_in_flight():
+        """Checks if there is no ajax in flight and also logs current status
+        """
+        prev_log_msg = _thread_local.ajax_log_msg
+
+        # 5.5.z and 5.7.0.4+
+        if not store.current_appliance.is_miqqe_patch_candidate:
+            try:
+                anything_in_flight = in_flight("return ManageIQ.qe.anythingInFlight()")
+            except Exception as e:
+                # if jQuery in error message, a non-cfme page (proxy error) is displayed
+                # should be handled by something else
+                if "jquery" not in str(e).lower():
+                    raise
+                return True
+            running = execute_script("return ManageIQ.qe.inFlight()")
+            log_msg = ', '.join(["{}: {}".format(k, str(v)) for k, v in running.iteritems()])
+        # 5.6.z, 5.7.0.{1,2,3}
+        else:
+            try:
+                running = in_flight(js.in_flight)
+            except Exception as e:
+                # if jQuery in error message, a non-cfme page (proxy error) is displayed
+                # should be handled by something else
+                if "jquery" not in str(e).lower():
+                    raise
+                return True
+            anything_in_flight = False
+            anything_in_flight |= running["jquery"] > 0
+            anything_in_flight |= running["prototype"] > 0
+            anything_in_flight |= running["spinner"]
+            anything_in_flight |= running["document"] != "complete"
+            anything_in_flight |= running["autofocus"] > 0
+            anything_in_flight |= running["debounce"] > 0
+            anything_in_flight |= running["miqQE"] > 0
+            log_msg = ', '.join(["{}: {}".format(k, str(v)) for k, v in running.iteritems()])
+
+        # Log the message only if it's different from the last one
+        if prev_log_msg != log_msg:
+            _thread_local.ajax_log_msg = log_msg
+            logger.trace('Ajax running: %s', log_msg)
+        if (not anything_in_flight) and prev_log_msg:
+            logger.trace('Ajax done')
+
+        return not anything_in_flight
+
+    wait_for(
+        _nothing_in_flight,
+        num_sec=_thread_local.ajax_timeout, delay=0.1, message="wait for ajax", quiet=True,
+        silent_failure=True)
+
+    # If we are not supposed to take page screenshots...well...then...dont.
+    if store.config and not store.config.getvalue('page_screenshots'):
+        return
+
+    url = browser().current_url
+    url = url.replace(base_url(), '')
+    url = url.replace("/", '_')
+    if url not in urls:
+        logger.info('Taking picture of page: %s', url)
+        ss, sse = take_screenshot()
+        if ss:
+            ss_path = log_path.join('page_screenshots')
+            if not ss_path.exists():
+                ss_path.mkdir()
+            with ss_path.join("{}.png".format(url)).open('wb') as f:
+                f.write(base64.b64decode(ss))
+        urls.append(url)
 
 
-def is_displayed(loc):
+@removed
+@contextmanager
+def ajax_timeout(seconds):
+    """Change the AJAX timeout in this context. Useful when something takes a long time.
+
+    Args:
+        seconds: Numebr of seconnds to wait.
+    """
+    original = _thread_local.ajax_timeout
+    _thread_local.ajax_timeout = seconds
+    yield
+    _thread_local.ajax_timeout = original
+
+
+@removed
+def is_displayed(loc, _deep=0, **kwargs):
     """
     Checks if a particular locator is displayed
 
     Args:
         loc: A locator, expects either a  string, WebElement, tuple.
 
+    Keywords:
+        move_to: Uses :py:func:`move_to_element` instead of :py:func:`element`
+
     Returns: ``True`` if element is displayed, ``False`` if not
 
     Raises:
         NoSuchElementException: If element is not found on page
+        CFMEExceptionOccured: When there is a CFME rails exception on the page.
     """
+    move_to = kwargs.pop("move_to", False)
     try:
-        return element(loc).is_displayed()
-    except NoSuchElementException:
+        if move_to:
+            e = move_to_element(loc, **kwargs)
+        else:
+            e = element(loc, **kwargs)
+        return e.is_displayed()
+    except (NoSuchElementException, exceptions.CannotScrollException):
         return False
+    except StaleElementReferenceException:
+        # It can happen sometimes that the change will happen between element lookup and visibility
+        # check. Then StaleElementReferenceException happens. We give it two additional tries.
+        # One regular. And one if something really bad happens. We don't check WebElements as it has
+        # no point.
+        if _deep >= 2 or isinstance(loc, WebElement):
+            # Too deep, or WebElement, which has no effect in repeating
+            raise
+        else:
+            # So try it again after a little bit of sleep
+            sleep(0.05)
+            return is_displayed(loc, _deep + 1)
 
 
-def wait_for_element(loc):
+@removed
+def is_displayed_text(text):
+    """
+    Checks if a particular text is displayed
+
+    Args:
+        text: A string.
+
+    Returns: A string containing the text
+    """
+    return is_displayed("//*[normalize-space(text())={}]".format(quoteattr(text)))
+
+
+@removed
+def wait_for_element(*locs, **kwargs):
     """
     Wrapper around wait_until, specific to an element.
 
     Args:
         loc: A locator, expects either a string, WebElement, tuple.
+    Keywords:
+        all_elements: Whether to wait not for one, but all elements (Default False)
+        timeout: How much time to wait
     """
-    wait_until(lambda s: is_displayed(loc), "Element '{}' did not appear as expected.".format(loc))
+    # wait_until(lambda s: is_displayed(loc),"Element '{}' did not appear as expected.".format(loc))
+    filt = all if kwargs.get("all_elements", False) else any
+    msg = "All" if kwargs.get("all_elements", False) else "Any"
+    new_kwargs = {}
+    if "timeout" in kwargs:
+        new_kwargs["timeout"] = kwargs["timeout"]
+    wait_until(
+        lambda s: filt([is_displayed(loc, move_to=True) for loc in locs]),
+        msg="{} of the elements '{}' to appear".format(msg, str(locs)),
+        **kwargs
+    )
 
 
-def handle_alert(cancel=False, wait=30.0, squash=False):
+@removed
+def get_alert():
+    return browser().switch_to_alert()
+
+
+@removed
+def is_alert_present():
+    try:
+        get_alert().text
+    except NoAlertPresentException:
+        return False
+    else:
+        return True
+
+
+@removed
+def dismiss_any_alerts():
+    """Loops until there are no further alerts present to dismiss.
+
+    Useful for handling the cases where the alert pops up multiple times.
+    """
+    try:
+        while is_alert_present():
+            alert = get_alert()
+            logger.warning("Dismissing additional alert with text: %s", alert.text)
+            alert.dismiss()
+    except NoAlertPresentException:  # Just in case. is_alert_present should be reliable, but still.
+        pass
+
+
+@removed
+def handle_alert(cancel=False, wait=30.0, squash=False, prompt=None, check_present=False):
     """Handles an alert popup.
 
     Args:
@@ -148,11 +525,15 @@ def handle_alert(cancel=False, wait=30.0, squash=False):
             Default 30 seconds, can be set to 0 to disable waiting.
         squash: Whether or not to squash errors during alert handling.
             Default False
+        prompt: If the alert is a prompt, specify the keys to type in here
+        check_present: Does not squash
+            :py:class:`selenium.common.exceptions.NoAlertPresentException`
 
     Returns:
-        True if the alert was handled, False if exceptions were squashed.
+        True if the alert was handled, False if exceptions were
+        squashed, None if there was no alert.
 
-    No exceptions will be raised if ``squash`` is True.
+    No exceptions will be raised if ``squash`` is True and ``check_present`` is False.
 
     Raises:
         utils.wait.TimedOutError: If the alert popup does not appear
@@ -160,61 +541,231 @@ def handle_alert(cancel=False, wait=30.0, squash=False):
             or dismissing the alert.
 
     """
-
     # throws timeout exception if not found
     try:
         if wait:
-            wait = WebDriverWait(browser(), 30.0)
-            wait.until(expected_conditions.alert_is_present())
-        popup = browser().switch_to_alert()
+            WebDriverWait(browser(), wait).until(expected_conditions.alert_is_present())
+        popup = get_alert()
         answer = 'cancel' if cancel else 'ok'
-        logger.info('Handling popup "%s", clicking %s' % (popup.text, answer))
+        t = "alert" if prompt is None else "prompt"
+        logger.info('Handling %s %s, clicking %s', t, popup.text, answer)
+        if prompt is not None:
+            logger.info("Typing in: %s", prompt)
+            popup.send_keys(prompt)
         popup.dismiss() if cancel else popup.accept()
+        # Should any problematic "double" alerts appear here, we don't care, just blow'em away.
+        dismiss_any_alerts()
         wait_for_ajax()
         return True
-    except:
+    except NoAlertPresentException:
+        if check_present:
+            raise
+        else:
+            return None
+    except Exception as e:
+        logger.exception(e)
         if squash:
             return False
         else:
             raise
 
 
-def click(loc, wait_ajax=True):
+@removed
+def click(loc, wait_ajax=True, no_custom_handler=False):
     """
     Clicks on an element.
+
+    If the element implements `_custom_click_handler` the control will be given to it. Then the
+    handler decides what to do (eg. do not click under some circumstances).
+
+    Args:
+        loc: A locator, expects either a string, WebElement, tuple or an object implementing
+            `_custom_click_handler` method.
+        wait_ajax: Whether to wait for ajax call to finish. Default True but sometimes it's
+            handy to not do that. (some toolbar clicks)
+        no_custom_handler: To prevent recursion, the custom handler sets this to True.
+    """
+    if hasattr(loc, "_custom_click_handler") and not no_custom_handler:
+        # Object can implement own modification of click behaviour
+        return loc._custom_click_handler(wait_ajax=wait_ajax)
+
+    # Move mouse cursor to element
+    move_to_element(loc)
+    # and then click on current mouse position
+    ActionChains(browser()).click().perform()
+    # -> using this approach, we don't check if we clicked a specific element
+    if wait_ajax:
+        wait_for_ajax()
+    return True
+
+
+@removed
+def raw_click(loc, wait_ajax=True):
+    """Does raw selenium's .click() call on element. Circumvents mouse move.
+
+    Args:
+        loc: Locator to click on.
+        wait_ajax: Whether to wait for ajax.
+    """
+    element(loc).click()
+    if wait_ajax:
+        wait_for_ajax()
+
+
+@removed
+def double_click(loc, wait_ajax=True):
+    """Double-clicks on an element.
 
     Args:
         loc: A locator, expects either a string, WebElement, tuple.
         wait_ajax: Whether to wait for ajax call to finish. Default True but sometimes it's
             handy to not do that. (some toolbar clicks)
     """
-    ActionChains(browser()).move_to_element(element(loc)).click().perform()
+    # Move mouse cursor to element
+    move_to_element(loc)
+    # and then click on current mouse position
+    ActionChains(browser()).double_click().perform()
+    # -> using this approach, we don't check if we clicked a specific element
     if wait_ajax:
         wait_for_ajax()
+    return True
 
 
-def move_to_element(loc):
+@removed
+def drag_and_drop(source_element, dest_element):
+    """Drag and Drop element.
+
+    Args:
+        source_element: A locator, expects either a string, WebElement, tuple.
+        dest_element: A locator, expects either a string, WebElement, tuple.
+        wait_ajax: Whether to wait for ajax call to finish. Default True but sometimes it's
+            handy to not do that. (some toolbar clicks)
+    """
+    ActionChains(browser()).drag_and_drop(source_element, dest_element).perform()
+
+
+@removed
+def drag_and_drop_by_offset(source_element, x=0, y=0):
+    """Drag and Drop element by offset
+
+    Args:
+        source_element: A locator, expects either a string, WebElement, tuple.
+        x: Distance in pixels on X axis to move it.
+        y: Distance in pixels on Y axis to move it.
+    """
+    e = move_to_element(source_element)
+    ActionChains(browser()).drag_and_drop_by_offset(e, x, y).perform()
+
+
+@removed
+def move_to_element(loc, **kwargs):
     """
     Moves to an element.
 
     Args:
         loc: A locator, expects either a string, WebElement, tuple.
+    Returns: Returns the element it was moved to to enable chaining.
     """
-    ActionChains(browser()).move_to_element(element(loc)).perform()
+    brand = "//div[@id='page_header_div']//div[contains(@class, 'brand')]"
+    wait_for_ajax()
+    el = element(loc, **kwargs)
+    if el.tag_name == "option":
+        # Instead of option, let's move on its parent <select> if possible
+        parent = element("..", root=el)
+        if parent.tag_name == "select":
+            move_to_element(parent)
+            return el
+    move_to = ActionChains(browser()).move_to_element(el)
+    try:
+        move_to.perform()
+    except MoveTargetOutOfBoundsException:
+        # ff workaround
+        execute_script("arguments[0].scrollIntoView();", el)
+        if elements(brand) and not is_displayed(brand):
+            # If it does it badly that it moves whole page, this moves it back
+            try:
+                execute_script("arguments[0].scrollIntoView();", element(brand))
+            except MoveTargetOutOfBoundsException:
+                pass
+        try:
+            move_to.perform()
+        except MoveTargetOutOfBoundsException:  # This has become desperate now.
+            raise exceptions.CannotScrollException(
+                "Despite all the workarounds, scrolling to `{}` was unsuccessful.".format(loc))
+    return el
 
 
-def text(loc):
-    """
-    Returns the text of an element.
+@removed
+def text(loc, **kwargs):
+    """ Returns the text of an element. Always.
+
+    If the element is not visible and the text cannot be retrieved by usual means, JS is used.
 
     Args:
         loc: A locator, expects eithera  string, WebElement, tuple.
 
     Returns: A string containing the text of the element.
     """
-    return element(loc).text
+    try:
+        text = move_to_element(loc, **kwargs).text.strip()
+        if not text:
+            # Not visible for some other reason?
+            text = text_content(loc, **kwargs)
+        return text
+    except exceptions.CannotScrollException:
+        # Work around, the element is not movable to
+        return text_content(loc, **kwargs)
 
 
+def text_content(loc, **kwargs):
+    """Retrieves the text content of the element using JavaScript.
+
+    Use if the element is not visible
+
+    Args:
+        loc: A locator, expects either a string, WebElement or tuple
+
+    Returns: A string containing the text of the element.
+    """
+    text = execute_script(
+        "return arguments[0].textContent || arguments[0].innerText;",
+        element(loc, **kwargs))
+    return text.strip() if text is not None else ""
+
+
+@removed
+def text_sane(loc, **kwargs):
+    """Returns text decoded from UTF-8 and stripped
+
+    Args:
+        loc: A locator, expects eithera  string, WebElement, tuple.
+
+    Returns: A string containing the text of the element, decoded and stripped.
+    """
+    # TODO: normalize_space() when the PR comes in.
+    return re.sub(r'\s+', ' ', text(loc).encode("utf-8"))
+
+
+@removed
+def value(loc):
+    """
+    Returns the value of an input element.
+
+    Args:
+        loc: A locator, expects eithera  string, WebElement, tuple.
+
+    Returns: A string containing the value of the input element.
+    """
+    return get_attribute(loc, 'value')
+
+
+@removed
+def classes(loc):
+    """Return a list of classes attached to the element."""
+    return set(execute_script("return arguments[0].classList;", element(loc)))
+
+
+@removed
 def tag(loc):
     """
     Returns the tag name of an element
@@ -227,6 +778,7 @@ def tag(loc):
     return element(loc).tag_name
 
 
+@removed
 def get_attribute(loc, attr):
     """
     Returns the value of the HTML attribute of the given locator.
@@ -240,20 +792,81 @@ def get_attribute(loc, attr):
     return element(loc).get_attribute(attr)
 
 
-def send_keys(loc, text):
+@removed
+def set_attribute(loc, attr, value):
+    """Sets the attribute of an element.
+
+    This is usually not done, that's why it is not implemented in selenium. But sometimes ...
+
+    Args:
+        loc: A locator, expects either a string, WebElement, tuple.
+        attr: Attribute name.
+        value: Value to set.
     """
-    Sends the supplied keys to an element.
+    logger.info(
+        "!!! ATTENTION! SETTING READ-ONLY ATTRIBUTE %s OF %s TO %s!!!", attr, loc, value)
+    return execute_script(
+        "arguments[0].setAttribute(arguments[1], arguments[2]);", element(loc), attr, value)
+
+
+@removed
+def unset_attribute(loc, attr):
+    """Removes an attribute of an element.
+
+    This is usually not done, that's why it is not implemented in selenium. But sometimes ...
+
+    Args:
+        loc: A locator, expects either a string, WebElement, tuple.
+        attr: Attribute name.
+    """
+    logger.info("!!! ATTENTION! REMOVING READ-ONLY ATTRIBUTE %s OF %s!!!", attr, loc)
+    return execute_script("arguments[0].removeAttribute(arguments[1]);", element(loc), attr)
+
+
+@removed
+def set_angularjs_value(loc, value):
+    """Sets value of an element managed by angularjs
+
+    Args:
+        loc: A locator, expects either a string, WebElement, tuple.
+        value: Value to set.
+    """
+    logger.info("Setting value of an angularjs element %s to %s", loc, value)
+    return execute_script(js.set_angularjs_value_script, element(loc), value)
+
+
+@removed
+def send_keys(loc, text):
+    """Sends the supplied keys to an element. Handles the file upload fields on background.
+
+    If it detects the element is and input of type file, it uses the LocalFileDetector so
+    the file gets transferred properly. Otherwise it takes care of having UselessFileDetector.
 
     Args:
         loc: A locator, expects either a string, WebElement, tuple.
         text: The text to inject into the element.
     """
     if text is not None:
-        el = element(loc)
-        ActionChains(browser()).move_to_element(el).send_keys_to_element(el, text).perform()
+        file_intercept = False
+        # If the element is input type file, we will need to use the file detector
+        if tag(loc) == 'input':
+            type_attr = get_attribute(loc, 'type')
+            if type_attr and type_attr.strip() == 'file':
+                file_intercept = True
+        try:
+            if file_intercept:
+                # If we detected a file upload field, let's use the file detector.
+                browser().file_detector = LocalFileDetector()
+            move_to_element(loc).send_keys(text)
+        finally:
+            # Always the UselessFileDetector for all other kinds of fields, so do not leave
+            # the LocalFileDetector there.
+            if file_intercept:
+                browser().file_detector = UselessFileDetector()
         wait_for_ajax()
 
 
+@removed
 def checkbox(loc, set_to=False):
     """
     Checks or unchecks a given checkbox
@@ -264,15 +877,24 @@ def checkbox(loc, set_to=False):
         loc: The locator of the element
         value: The value the checkbox should represent as a bool (or None to do nothing)
 
-    Returns: None
+    Returns: Previous state of the checkbox
     """
     if set_to is not None:
-        el = element(loc)
-        ActionChains(browser()).move_to_element(el).perform()
-        if el.is_selected() is not set_to:
+        el = move_to_element(loc)
+        if el.tag_name == 'img':
+            # Yeah, CFME sometimes uses images for check boxen. *sigh*
+            # item_chk0 = unchecked, item_chk1 = checked
+            selected = 'item_chk1' in el.get_attribute('src')
+        else:
+            selected = el.is_selected()
+
+        if selected is not set_to:
+            logger.debug("Setting checkbox to {}".format(set_to))
             click(el)
+        return selected
 
 
+@removed
 def check(loc):
     """
     Convenience function to check a checkbox
@@ -280,9 +902,10 @@ def check(loc):
     Args:
         loc: The locator of the element
     """
-    checkbox(loc, True)
+    return checkbox(loc, True)
 
 
+@removed
 def uncheck(loc):
     """
     Convenience function to uncheck a checkbox
@@ -290,9 +913,10 @@ def uncheck(loc):
     Args:
         loc: The locator of the element
     """
-    checkbox(loc, False)
+    return checkbox(loc, False)
 
 
+@removed
 def current_url():
     """
     Returns the current_url of the page
@@ -302,9 +926,15 @@ def current_url():
     return browser().current_url
 
 
+@removed
+def title():
+    return browser().title
+
+
+@removed
 def get(url):
     """
-    Changes page to the spceified URL
+    Changes page to the specified URL
 
     Args:
         url: URL to navigate to.
@@ -312,6 +942,7 @@ def get(url):
     return browser().get(url)
 
 
+@removed
 def refresh():
     """
     Refreshes the current browser window.
@@ -319,180 +950,40 @@ def refresh():
     browser().refresh()
 
 
-def move_to_fn(*els):
-    """
-    Returns a function which successively moves through a series of elements.
-
-    Args:
-        els: An iterable of elements:
-    Returns: The move function
-    """
-    def f(_):
-        for el in els:
-            move_to_element(el)
-    return f
-
-
-def click_fn(*els):
-    """
-    Returns a function which successively clicks on a series of elements.
-
-    Args:
-       els: An iterable of elements:
-    Returns: The click function
-    """
-    def f(_):
-        for el in els:
-            click(el)
-    return f
-
-
-def first_from(*locs, **kwargs):
-    """ Goes through locators and first valid element received is returned.
-
-    Useful for things that could be located different way
-
-    Args:
-        *locs: Locators to pass through
-        **kwargs: Keyword arguments to pass to element()
-    Raises:
-        NoSuchElementException: When none of the locator could find the element.
-    Returns: :py:class:`WebElement`
-    """
-    assert len(locs) > 0, "You must provide at least one locator to look for!"
-    for locator in locs:
-        try:
-            return element(locator, **kwargs)
-        except NoSuchElementException:
-            pass
-    # To make nice error
-    msg = locs[0] if len(locs) == 1 else ("%s or %s" % (", ".join(locs[:-1]), locs[-1]))
-    raise NoSuchElementException("Could not find element with possible locators %s." % msg)
-
 # Begin CFME specific stuff, should eventually factor
 # out everything above into a lib
 
 
+@removed
 def base_url():
     """
     Returns the base url.
 
     Returns: `base_url` from env config yaml
     """
-    return conf.env['base_url']
+    return store.base_url
 
 
-ajax_wait_js = """
-var inflight = function() {
-    return Array.prototype.slice.call(arguments,0).reduce(function (n, f) {
-        try {flt = f() || 0;
-             flt=(Math.abs(flt)+flt)/2; return flt + n;} catch (e) { return n }}, 0)};
-return inflight(function() { return jQuery.active},
-                function() { return Ajax.activeRequestCount},
-                function() { return window.miqAjaxTimers},
-                function() { if (document.readyState == "complete") { return 0 } else { return 1}});
-"""
+class ContextWrapper(dict):
+    """Dict that provides .attribute access + dumps all keys when not found."""
+    def __getattr__(self, attr):
+        try:
+            return self[attr]
+        except KeyError:
+            raise AttributeError(
+                "No such key {} in the context! (available: {})".format(
+                    repr(attr), repr(self.keys())))
+
+    def __getitem__(self, item):
+        try:
+            return super(ContextWrapper, self).__getitem__(item)
+        except KeyError:
+            raise KeyError(
+                "No such key {} in the context! (available: {})".format(
+                    repr(item), repr(self.keys())))
 
 
-def go_to(page_name):
-    """go_to task mark, used to ensure tests start on the named page, logged in as Administrator.
-
-    Args:
-        page_name: Name a page from the current :py:data:`ui_navigate.nav_tree` tree to navigate to.
-
-    Usage:
-        @pytest.sel.go_to('page_name')
-        def test_something_on_page_name():
-            # ...
-
-    """
-    def go_to_wrapper(test_callable):
-        # Optional, but cool. Marks a test with the page_name, so you can
-        # py.test -k page_name
-        test_callable = getattr(pytest.mark, page_name)(test_callable)
-        # Use fixtureconf to mark the test with destination page_name
-        test_callable = pytest.mark.fixtureconf(page_name=page_name)(test_callable)
-        # Use the 'go_to' fixture, which looks for the page_name fixtureconf
-        test_callable = pytest.mark.usefixtures('go_to_fixture')(test_callable)
-        return test_callable
-    return go_to_wrapper
-
-
-@pytest.fixture
-def go_to_fixture(fixtureconf, browser):
-    """"Private" implementation of go_to in fixture form.
-
-    Used by the :py:func:`go_to` decorator, this is the actual fixture that does
-    the work set up by the go_to decorator. py.test fixtures themselves can't have
-    underscores in their name, so we can't imply privacy with that convention.
-
-    Don't use this fixture directly, use the go_to decorator instead.
-
-    """
-    page_name = fixtureconf['page_name']
-    force_navigate(page_name)
-
-
-def force_navigate(page_name, _tries=0, *args, **kwargs):
-    """force_navigate(page_name)
-
-    Given a page name, attempt to navigate to that page no matter what breaks.
-
-    Args:
-        page_name: Name a page from the current :py:data:`ui_navigate.nav_tree` tree to navigate to.
-
-    """
-    if _tries >= 3:
-        # Need at least three tries:
-        # 1: login_admin handles an alert or closes the browser due any error
-        # 2: If login_admin handles an alert, go_to can still encounter an unexpected error
-        # 3: Everything should work. If not, NavigationError.
-        raise exceptions.NavigationError(page_name)
-
-    _tries += 1
-
-    logger.debug('force_navigate to %s, try %d' % (page_name, _tries))
-    # circular import prevention: cfme.login uses functions in this module
-    from cfme import login
-    # Import the top-level nav menus for convenience
-    from cfme.web_ui import menu  # NOQA
-
-    # browser fixture should do this, but it's needed for subsequent calls
-    ensure_browser_open()
-
-    # Clear any running "spinnies"
-    try:
-        browser().execute_script('miqSparkleOff();')
-    except:
-        # miqSparkleOff undefined, so it's definitely off.
-        pass
-
-    try:
-        # What we'd like to happen...
-        login.login_admin()
-        logger.info('Navigating to %s' % page_name)
-        ui_navigate.go_to(page_name, *args, **kwargs)
-    except (KeyboardInterrupt, ValueError):
-        # KeyboardInterrupt: Don't block this while navigating
-        # ValueError: ui_navigate.go_to can't handle this page, give up
-        raise
-    except UnexpectedAlertPresentException:
-        if _tries == 1:
-            # There was an alert, accept it and try again
-            handle_alert(wait=0)
-        else:
-            # There was still an alert when we tried again, shoot the browser in the head
-            logger.debug("Unxpected alert on try %d, recycling browser" % _tries)
-            browser().quit()
-        force_navigate(page_name, _tries, *args, **kwargs)
-    except Exception as ex:
-        # Anything else happened, nuke the browser and try again.
-        logger.info('Caught %s during navigation, trying again.' % type(ex).__name__)
-        logger.debug(format_exc())
-        browser().quit()
-        force_navigate(page_name, _tries, *args, **kwargs)
-
-
+@removed
 def detect_observed_field(loc):
     """Detect observed fields; sleep if needed
 
@@ -504,10 +995,13 @@ def detect_observed_field(loc):
     If found, that interval will be used instead of the default.
 
     """
-    if is_displayed(loc):
-        el = element(loc)
-    else:
-        # Element not visible, sort out
+    try:
+        if is_displayed(loc):
+            el = element(loc)
+        else:
+            # Element not visible, sort out
+            return
+    except StaleElementReferenceException:
         return
 
     # Default wait period, based on the default UI wait (700ms)
@@ -540,12 +1034,12 @@ def detect_observed_field(loc):
         # In either case, we've detected an observed text field and should wait
         interval = default_wait
 
-    logger.debug('  Observed field detected, pausing %.1f seconds' % interval)
+    logger.trace('  Observed field detected, pausing %.1f seconds', interval)
     sleep(interval)
     wait_for_ajax()
 
 
-@singledispatch
+@removed
 def set_text(loc, text):
     """
     Clears the element and then sends the supplied keys.
@@ -553,12 +1047,179 @@ def set_text(loc, text):
     Args:
         loc: A locator, expects either a string, WebElement, tuple.
         text: The text to inject into the element.
+
+    Returns:
+        Any text that might have been in the textbox element already
     """
     if text is not None:
-        el = element(loc)
-        ActionChains(browser()).move_to_element(el).perform()
-        el.clear()
-        el.send_keys(text)
+        el = move_to_element(loc)
+        old_text = el.get_attribute('value')
+        if text != old_text:
+            el.clear()
+            send_keys(el, text)
+        return old_text
+
+
+class Select(SeleniumSelect, Pretty):
+    """ A proxy class for the real selenium Select() object.
+
+    We differ in one important point, that we can instantiate the object
+    without it being present on the page. The object is located at the beginning
+    of each function call.
+
+    Can hadle patternfly ``selectpicker`` kind of select. It alters the behaviour slightly, it does
+    not use :py:func:`move_to_element` and uses JavaScript more extensively.
+
+    Args:
+        loc: A locator.
+
+    Returns: A :py:class:`cfme.web_ui.Select` object.
+    """
+
+    pretty_attrs = ['_loc', 'is_multiple']
+
+    Option = namedtuple("Option", ["text", "value"])
+
+    is_broken = False  # For compatibility with AngularSelect
+
+    def __init__(self, loc, multi=False, none=None):
+        self._none = none
+        if isinstance(loc, Select):
+            self._loc = loc._loc
+        else:
+            self._loc = loc
+        self.is_multiple = multi
+
+    @property
+    def none(self):
+        if self._none:
+            return version.pick(self._none)
+        else:
+            return None
+
+    @property
+    def is_patternfly(self):
+        return "selectpicker" in get_attribute(self._loc, "class")
+
+    @property
+    def _el(self):
+        if self.is_patternfly:
+            return element(self, check_visibility=False)
+        else:
+            return move_to_element(self)
+
+    @property
+    def classes(self):
+        return classes(self._el)
+
+    @property
+    def all_options(self):
+        """Returns a list of tuples of all the options in the Select"""
+        # More reliable using javascript
+        script = dedent("""\
+            var result_arr = [];
+            var opt_elements = arguments[0].options;
+            for(var i = 0; i < opt_elements.length; i++){
+                var option = opt_elements[i];
+                result_arr.push([option.innerHTML, option.getAttribute("value")]);
+            }
+            return result_arr;
+        """)
+        options = execute_script(script, element(self._loc))
+        parser = HTMLParser()
+        return [self.Option(parser.unescape(option[0]), option[1]) for option in options]
+
+    @property
+    def all_selected_options(self):
+        """Fast variant of the original all_selected_options.
+
+        Selenium's all_selected_options iterates over ALL of the options, this directly returns
+        only those that are selected.
+        """
+        return execute_script(
+            "return arguments[0].selectedOptions;",
+            element(self, check_visibility=not self.is_patternfly))
+
+    @property
+    def first_selected_option(self):
+        """Fast variant of the original first_selected_option.
+
+        Uses all_selected_options, mimics selenium's exception behaviour.
+        """
+        try:
+            return self.all_selected_options[0]
+        except IndexError:
+            raise NoSuchElementException("No options are selected")
+
+    @property
+    def first_selected_option_text(self):
+        if not self.is_patternfly:
+            return text(self.first_selected_option)
+        else:
+            parser = HTMLParser()
+            return parser.unescape(
+                execute_script("return arguments[0].innerHTML;", self.first_selected_option))
+
+    def deselect_all(self):
+        """Fast variant of the original deselect_all.
+
+        Uses all_selected_options, mimics selenium's exception behaviour.
+        """
+        if not self.is_multiple:
+            raise NotImplementedError("You may only deselect all options of a multi-select")
+        if not self.is_patternfly:
+            for opt in self.all_selected_options:
+                raw_click(opt)
+        else:
+            execute_script(
+                "$(arguments[0]).selectpicker('deselectAll'); $(arguments[0]).trigger('change');",
+                element(self))
+
+    def get_value_by_text(self, text):
+        # unescape because it turns <> into &lt;&gt; which we don't want in xpath
+        opt = element(
+            ".//option[normalize-space(.)={}]".format(unescape(quoteattr(text))),
+            root=element(self, check_visibility=not self.is_patternfly))
+        return get_attribute(opt, "value")
+
+    def select_by_value(self, value):
+        if not self.is_patternfly:
+            return super(Select, self).select_by_value(value)
+        else:
+            execute_script(
+                "$(arguments[0]).selectpicker('val', arguments[1]);"
+                "$(arguments[0]).trigger('change');",
+                element(self, check_visibility=not self.is_patternfly), value)
+            return None
+
+    def select_by_visible_text(self, text):
+        """Dump all of the options if the required option is not present."""
+        try:
+            if not self.is_patternfly:
+                return super(Select, self).select_by_visible_text(text)
+            else:
+                # selectpicker needs value only
+                return self.select_by_value(self.get_value_by_text(text))
+        except NoSuchElementException as e:
+            msg = str(e)
+            available = ", ".join(repr(opt.text) for opt in self.all_options)
+            raise type(e)("{} - Available options: {}".format(msg, available))
+
+    def locate(self):
+        """Guards against passing wrong locator (not resolving to a select)."""
+        sel_el = element(self._loc) if self.is_patternfly else move_to_element(self._loc)
+        sel_tag = tag(sel_el)
+        if sel_tag != "select":
+            raise exceptions.UnidentifiableTagType(
+                "{} ({}) is not a select!".format(self._loc, sel_tag))
+        return sel_el
+
+    def observer_wait(self):
+        detect_observed_field(self._loc)
+
+    def __repr__(self):
+        return "{}({}, multi={})".format(
+            type(self).__name__, repr(self._loc), repr(self.is_multiple))
 
 
 @multidispatch
@@ -566,45 +1227,85 @@ def select(loc, o):
     raise NotImplementedError('Unable to select {} in this type: {}'.format(o, loc))
 
 
-@select.method((object, tuple))
-def _select_tuple(select_element, o):
-    """
-    Takes a locator and an object and selects using the correct method.
+@select.method((object, ByValue))
+def _select_tuple(loc, val):
+    value = val.value
+    if not value and isinstance(loc, Select):
+        if loc.none:
+            value = loc.none
+        else:
+            return
+    elif not value:
+        return
 
-    If o is a string, then it is assumed the user wishes to select by visible text.
-    If o is a tuple, then the first argument defines the type. Either ``TEXT`` or ``VALUE``.
-    A choice of select method is then determined.
-
-    Args:
-        loc: A locator, expects either a string, WebElement, tuple.
-        o: An object, can be either a string or a tuple.
-    """
-    vtype, value = o
-    if vtype == TEXT:
-        select_by_text(select_element, value)
-    if vtype == VALUE:
-        select_by_value(select_element, value)
-
-
-@select.method((object, str))
-def _select_str(select_element, s):
-    select_by_text(select_element, s)
+    # Do not "cast" the loc unless it is needed
+    from cfme.web_ui import AngularSelect
+    if type(loc) in {Select, AngularSelect}:
+        l = loc
+    else:
+        l = Select(loc)
+    return select_by_value(l, value)
 
 
-def select_by_text(select_element, text):
+@select.method((object, type(None)))
+@select.method((object, basestring))
+@select.method((object, ByText))
+def _select_str(loc, s):
+    value = s
+    if not value and isinstance(loc, Select):
+        if loc.none:
+            value = loc.none
+        else:
+            return
+    elif not value:
+        return
+
+    # Do not "cast" the loc unless it is needed
+    from cfme.web_ui import AngularSelect
+    if type(loc) in {Select, AngularSelect}:
+        l = loc
+    else:
+        l = Select(loc)
+    return select_by_text(l, str(value))
+
+
+@select.method((object, Iterable))
+def _select_iter(loc, items):
+    return [select(loc, item) for item in items]
+
+
+def _sel_desel(el, getter_fn, setter_attr, item):
+    wait_for_ajax()
+    if item is not None:
+        old_item = getter_fn(el)
+        if old_item != item:
+            getattr(el, setter_attr)(item)
+            wait_for_ajax()
+        return old_item
+
+
+@removed
+def select_by_text(select_element, txt):
     """
     Works on a select element and selects an option by the visible text.
 
     Args:
         loc: A locator, expects either a string, WebElement, tuple.
         text: The select element option's visible text.
+
+    Returns: previously selected text
     """
-    if text is not None:
-        select_element.select_by_visible_text(text)
-        wait_for_ajax()
+    def _getter(s):
+        try:
+            return s.first_selected_option.text
+        except (NoSuchElementException, AttributeError):
+            return None
+    return _sel_desel(select_element, _getter,
+                      'select_by_visible_text', txt)
 
 
-def select_by_value(select_element, value):
+@removed
+def select_by_value(select_element, val):
     """
     Works on a select element and selects an option by the value attribute.
 
@@ -612,34 +1313,11 @@ def select_by_value(select_element, value):
         loc: A locator, expects either a string, WebElement, tuple.
         value: The select element's option value.
     """
-    if value is not None:
-        select_element.select_by_value(value)
-        wait_for_ajax()
+    return _sel_desel(select_element, lambda s: ByValue(value(s)), 'select_by_value', val)
 
 
-def deselect(loc, o):
-    """
-    Takes a locator and an object and deselects using the correct method.
-
-    If o is a string, then it is assumed the user wishes to select by visible text.
-    If o is a tuple, then the first argument defines the type. Either ``TEXT`` or ``VALUE``.
-    A choice of select method is then determined.
-
-    Args:
-        loc: A locator, expects either a string, WebElement, tuple.
-        o: An object, can be either a string or a tuple.
-    """
-    if isinstance(o, basestring):
-        deselect_by_text(loc, o)
-    else:
-        vtype, value = o
-        if vtype == TEXT:
-            deselect_by_text(loc, value)
-        if vtype == VALUE:
-            deselect_by_value(loc, value)
-
-
-def deselect_by_text(select_element, text):
+@removed
+def deselect_by_text(select_element, txt):
     """
     Works on a select element and deselects an option by the visible text.
 
@@ -647,12 +1325,12 @@ def deselect_by_text(select_element, text):
         loc: A locator, expects either a string, WebElement, tuple.
         text: The select element option's visible text.
     """
-    if text is not None:
-        select_element.deselect_by_visible_text(text)
-        wait_for_ajax()
+    return _sel_desel(select_element, lambda s: s.first_selected_option.text,
+                      'deselect_by_visible_text', txt)
 
 
-def deselect_by_value(select_element, value):
+@removed
+def deselect_by_value(select_element, val):
     """
     Works on a select element and deselects an option by the value attribute.
 
@@ -660,6 +1338,35 @@ def deselect_by_value(select_element, value):
         loc: A locator, expects either a string, WebElement, tuple.
         value: The select element's option value.
     """
-    if value is not None:
-        select_element.deselect_by_value(value)
-        wait_for_ajax()
+    return _sel_desel(select_element, lambda s: ByValue(value(s)), 'deselect_by_value', val)
+
+
+@removed
+def execute_script(script, *args, **kwargs):
+    """Wrapper for execute_script() to not have to pull browser() from somewhere.
+
+    It also provides our library which is stored in data/lib.js file.
+    """
+    return browser().execute_script(dedent(script), *args, **kwargs)
+
+
+ScreenShot = namedtuple("screenshot", ['png', 'error'])
+
+
+@removed
+def take_screenshot():
+    screenshot = None
+    screenshot_error = None
+    try:
+        screenshot = browser().get_screenshot_as_base64()
+    except (AttributeError, WebDriverException):
+        # See comments utils.browser.ensure_browser_open for why these two exceptions
+        screenshot_error = 'browser error'
+    except Exception as ex:
+        # If this fails for any other reason,
+        # leave out the screenshot but record the reason
+        if str(ex):
+            screenshot_error = '{}: {}'.format(type(ex).__name__, str(ex))
+        else:
+            screenshot_error = type(ex).__name__
+    return ScreenShot(screenshot, screenshot_error)

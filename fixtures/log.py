@@ -2,9 +2,8 @@ import collections
 
 import pytest
 
-from utils.log import logger as cfme_logger
-from utils.log import format_marker
-
+from cfme.utils import log
+from cfme.utils.appliance import get_or_create_current_appliance
 #: A dict of tests, and their state at various test phases
 test_tracking = collections.defaultdict(dict)
 
@@ -12,34 +11,53 @@ test_tracking = collections.defaultdict(dict)
 # Expose the cfme logger as a fixture for convenience
 @pytest.fixture(scope='session')
 def logger():
-    return cfme_logger
+    return log.logger
 
 
-@pytest.mark.tryfirst
+@pytest.mark.hookwrapper
 def pytest_runtest_setup(item):
     path, lineno, domaininfo = item.location
-    cfme_logger.info(format_marker(_format_nodeid(item.nodeid), mark="-"),
+    logger().info(log.format_marker(_format_nodeid(item.nodeid), mark="-"),
         extra={'source_file': path, 'source_lineno': lineno})
+    yield
 
 
 def pytest_collection_modifyitems(session, config, items):
-    cfme_logger.info(format_marker('Starting new test run', mark="="))
+    logger().info(log.format_marker('Starting new test run', mark="="))
     expression = config.getvalue('keyword') or False
-    expr_string = ', will filter with "%s"' % expression if expression else ''
-    cfme_logger.info('Collected %i items%s' % (len(items), expr_string))
+    expr_string = ', will filter with "{}"'.format(expression) if expression else ''
+    logger().info('Collected {} items{}'.format(len(items), expr_string))
 
 
-@pytest.mark.trylast
+@pytest.mark.hookwrapper
 def pytest_runtest_logreport(report):
     # e.g. test_tracking['test_name']['setup'] = 'passed'
     #      test_tracking['test_name']['call'] = 'skipped'
     #      test_tracking['test_name']['teardown'] = 'failed'
+    yield
     test_tracking[_format_nodeid(report.nodeid, False)][report.when] = report.outcome
     if report.when == 'teardown':
         path, lineno, domaininfo = report.location
-        cfme_logger.info(format_marker('%s result: %s' % (_format_nodeid(report.nodeid),
-                _test_status(_format_nodeid(report.nodeid, False)))),
+        test_status = _test_status(_format_nodeid(report.nodeid, False))
+        if test_status == "failed":
+            appliance = get_or_create_current_appliance()
+            try:
+                logger().info(
+                    "Managed providers: {}".format(
+                        ", ".join([
+                            prov.key for prov in
+                            appliance.managed_known_providers]))
+                )
+            except KeyError as ex:
+                if 'ext_management_systems' in ex.msg:
+                    logger().warning("Unable to query ext_management_systems table; DB issue")
+                else:
+                    raise
+        logger().info(log.format_marker('{} result: {}'.format(_format_nodeid(report.nodeid),
+                test_status)),
             extra={'source_file': path, 'source_lineno': lineno})
+    if report.outcome == "skipped":
+        logger().info(log.format_marker(report.longreprtext))
 
 
 def pytest_exception_interact(node, call, report):
@@ -49,7 +67,7 @@ def pytest_exception_interact(node, call, report):
     # This is the same code that powers py.test's output, so we gain py.test's magical ability
     # to get useful AssertionError output by doing it this way, which makes the voodoo worth it.
     entry = call.excinfo.traceback.getcrashentry()
-    cfme_logger.error(call.excinfo.exconly(),
+    logger().error(call.excinfo.getrepr(),
         extra={'source_file': entry.path, 'source_lineno': entry.lineno + 1})
 
 
@@ -58,11 +76,12 @@ def pytest_sessionfinish(session, exitstatus):
     for test in test_tracking:
         c[_test_status(test)] += 1
     # Prepend a total to the summary list
-    results = ['total: %d' % sum(c.values())] + map(lambda n: '%s: %d' % (n[0], n[1]), c.items())
+    results = ['total: {}'.format(sum(c.values()))] + map(
+        lambda n: '{}: {}'.format(n[0], n[1]), c.items())
     # Then join it with commas
     summary = ', '.join(results)
-    cfme_logger.info(format_marker('Finished test run', mark='='))
-    cfme_logger.info(format_marker(str(summary), mark='='))
+    logger().info(log.format_marker('Finished test run', mark='='))
+    logger().info(log.format_marker(str(summary), mark='='))
 
 
 def _test_status(test_name):
@@ -75,7 +94,7 @@ def _test_status(test_name):
         return 'skipped'
     # Otherwise, report the call phase outcome (passed, skipped, or failed)
     else:
-        return test_phase['call']
+        return test_phase.get('call', 'skipped')
 
 
 def _format_nodeid(nodeid, strip_filename=True):

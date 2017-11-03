@@ -18,20 +18,24 @@ be easily adapted to use other VNC packages.
 Install requirements
 --------------------
 
-We'll need a VNC server (tigervnc-server), a lightweight window manager to run inside that
+We will need a VNC server (tigervnc-server), a lightweight window manager to run inside that
 VNC server (fluxbox), and a terminal emulator that can run inside the lightweight window
 manager (xterm)::
 
     # yum install tigervnc-server fluxbox xterm
 
-We'll also need the standalone selenium server, which will run inside the VNC server. You'll
-have to download the Selenium Server jar from their download page (the file should start
-with ``selenium-server-standalone``):
+We will also need the Standalone Selenium Server, which will run inside the VNC server. You can install and run it in any directory, but it is preferred to be installed in your virtualenv in a directory outside of or at the same level as your cfme_tests directory. You may be using this a lot so make sure the location is something you can easily remember.  The Standalone Selenium Server jar files for 2.x versions (2.53 has been recently tested) can be downloaded from:
 
-* `Standalone Selenium Server <http://docs.seleniumhq.org/download/>`_
+* `Standalone Selenium Server Ver 2 Downloads <http://selenium-release.storage.googleapis.com/index.html>`_
 
-You'll want to put this somewhere relatively safe (e.g. not /tmp), and remember where you
-put it for later.
+To run it, open a dedicated terminal window and type the line similar to this example::
+
+    # java -jar ../selenium/selenium-server-standalone-2.53.1.jar
+
+For complete documentation, please go to:
+
+* `Standalone Selenium Server Documentation <http://docs.seleniumhq.org/docs/03_webdriver.jsp#running-standalone-selenium-server-for-use-with-remotedrivers>`_
+
 
 Configure the VNC server
 ------------------------
@@ -81,7 +85,7 @@ Here's an example script that does those things:
 Important things:
 * The script **MUST** start with `#!/bin/sh` (or your shell shebang of choice).
 * The script **MUST** be executable (`chmod +x ~/.vnc/xstartup`)
-
+* The "-ensureCleanSession -trustAllSSLCertificates"  won't work with the selenium-server which is 3.x.x onward.
 Start the server
 ^^^^^^^^^^^^^^^^
 
@@ -145,6 +149,20 @@ An example of the yaml is below:
            desired_capabilities:
                platform: LINUX
                browserName: 'chrome'
+               # for the selenium-server version 3.x.x onward you will need to use
+               # following capabilities instead of using CLI arguments (uncomment next 2 lines)
+               # and do not use '-ensureCleanSession -trustAllSSLCertificates' in java -jar command
+               # which is used to launch selenium-server in xstartup script as shown 
+               # in 'Configure the startup script' section
+               # acceptInsecureCerts: true
+               # ensureCleanSession: true
+
+
+Note: 
+If you are using selenium server 3.4.0 then you might see issue related 'mouseMoveTo' which is open on GitHub:
+* https://github.com/SeleniumHQ/selenium/issues/4008
+* https://github.com/SeleniumHQ/selenium/issues/3808
+
 
 Security
 --------

@@ -1,26 +1,43 @@
 # -*- coding: utf-8 -*-
-import cfme.fixtures.pytest_selenium as sel
-from cfme.web_ui import Form, Region, fill, flash
+from cfme.utils.appliance.implementations.ui import navigator, navigate_to, CFMENavigateStep
+from navmazing import NavigateToSibling
+
+from widgetastic.widget import Select, ClickableMixin
+from widgetastic_patternfly import BootstrapSelect, Button, Input
+
+from cfme.base.login import BaseLoggedInPage
+from cfme.base.ui import Server
 
 
-import_form = Form(
-    fields=[
-        ("file_select", "//input[@id='upload_file']"),
-        ("upload_button", "//input[@id='upload_atags']")
-    ]
-)
+class InputButton(Input, ClickableMixin):
+    pass
 
 
-def make_button(button_alt):
-    return "//div[@id='buttons']/ul[@id='form_buttons']/li/a/img[@alt='%s']" % button_alt
+class ControlImportExportView(BaseLoggedInPage):
+
+    upload_button = InputButton("commit")
+    export_button = Button("Export")
+    commit_button = Button("Commit")
+
+    upload_file = Input("upload[file]")
+    export = BootstrapSelect("dbtype")
+    policy_profiles = Select(id="choices_chosen_")
+
+    @property
+    def is_displayed(self):
+        return (
+            self.logged_in_as_current_user and
+            self.navigation.currently_selected == ["Control", "Import / Export"]
+        )
 
 
-upload_buttons = Region(
-    locators=dict(
-        commit_button=make_button("Commit Import"),
-        cancel_button=make_button("Cancel Import"),
-    )
-)
+@navigator.register(Server)
+class ControlImportExport(CFMENavigateStep):
+    VIEW = ControlImportExportView
+    prerequisite = NavigateToSibling("LoggedIn")
+
+    def step(self):
+        self.view.navigation.select("Control", "Import / Export")
 
 
 def import_file(filename, cancel=False):
@@ -30,11 +47,21 @@ def import_file(filename, cancel=False):
         filename: Full path to file to import.
         cancel: Whether to click Cancel instead of commit.
     """
-    sel.force_navigate("control_import_export")
-    fill(
-        import_form,
-        {"file_select": filename},
-        action=import_form.upload_button
-    )
-    flash.assert_no_errors()
-    return sel.click(upload_buttons.cancel_button if cancel else upload_buttons.commit_button)
+    view = navigate_to(Server, "ControlImportExport")
+    assert view.is_displayed
+    view.fill({
+        "upload_file": filename
+    })
+    if cancel:
+        view.cancel_button.click()
+    else:
+        view.upload_button.click()
+    view.flash.assert_no_error()
+    view.flash.assert_message("Press commit to Import")
+    view.commit_button.click()
+
+
+def is_imported(policy_profile):
+    view = navigate_to(Server, "ControlImportExport")
+    assert view.is_displayed
+    return policy_profile in view.policy_profiles.read()

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Free appliance shepherd{% endblock %}
+{% block body %}
+<h1>Free appliance shepherd</h1>
+    {% for shepherd in shepherds %}
+        <h2>{{ shepherd.template_group.id }} | {{ shepherd.user_group.name }}</h2>
+        {% with shepherd.configured_shepherd_appliances as appliances %}
+            <h3>Preconfigured appliances ({{ appliances|length }})</h3>
+            {% if appliances %}
+                <table class="table table-striped">
+                    <thead>
+                        <th>Name</th>
+                        <th>Template</th>
+                        <th>Version</th>
+                        <th>Date</th>
+                        <th>Provider</th>
+                    </thead>
+                    <tbody>
+                        {% for appliance in appliances %}
+                            <tr>
+                                <td>{{ appliance.name }}</td>
+                                <td>{{ appliance.template.name }}</td>
+                                <td>{{ appliance.version }}</td>
+                                <td>{{ appliance.template.date }}</td>
+                                <td>{{ appliance.template.provider.id }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>Sorry, no shepherd appliances from preconfigured template for {{ shepherd.template_group.id }} | {{ shepherd.user_group.name }}</p>
+            {% endif %}
+        {% endwith %}
+        {% with shepherd.unconfigured_shepherd_appliances as appliances %}
+            <h3>Bare appliances ({{ appliances|length }})</h3>
+            {% if appliances %}
+                <table class="table table-striped">
+                    <thead>
+                        <th>Name</th>
+                        <th>Template</th>
+                        <th>Version</th>
+                        <th>Date</th>
+                        <th>Provider</th>
+                    </thead>
+                    <tbody>
+                        {% for appliance in appliances %}
+                            <tr>
+                                <td>{{ appliance.name }}</td>
+                                <td>{{ appliance.template.name }}</td>
+                                <td>{{ appliance.version }}</td>
+                                <td>{{ appliance.template.date }}</td>
+                                <td>{{ appliance.template.provider.id }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>Sorry, no shepherd appliances from nonconfigured template for {{ shepherd.template_group.id }} | {{ shepherd.user_group.name }}</p>
+            {% endif %}
+        {% endwith %}
+    {% endfor %}
+{% endblock %}

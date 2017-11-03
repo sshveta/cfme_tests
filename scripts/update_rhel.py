@@ -1,55 +1,38 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 """Run yum updates against a given repo
 """
 
 import argparse
 import sys
-from utils.conf import credentials
-from utils.ssh import SSHClient
+from cfme.utils.appliance import IPAppliance
 
 
 def main():
     parser = argparse.ArgumentParser(epilog=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('address', help='hostname or ip address of target appliance')
-    parser.add_argument('repo_url', help='updates base url')
+    parser.add_argument("-u", "--url", help="url(s) to use for update",
+        dest="urls", action="append")
+    parser.add_argument("-c", "--cleanup", help="Whether to cleanup /etc/yum.repos.d before start",
+        dest="cleanup", action="store_true")
+    parser.add_argument("--no_wait_ui", help="Whether to NOT wait for UI after reboot",
+        dest="no_wait_ui", action="store_false")
     parser.add_argument('--reboot', help='reboot after installation ' +
-        '(required for proper operation)', action="store_true")
+        '(required for proper operation)', action="store_true", default=False)
 
     args = parser.parse_args()
+    ip_a = IPAppliance(args.address)
+    # Don't reboot here, so we can print updates to the console when we do
+    res = ip_a.update_rhel(*args.urls, reboot=False, streaming=True, cleanup=args.cleanup)
 
-    ssh_kwargs = {
-        'username': credentials['ssh']['username'],
-        'password': credentials['ssh']['password'],
-        'hostname': args.address
-    }
+    if res.rc == 0:
+        if args.reboot:
+            print('Rebooting')
+            ip_a.reboot(wait_for_web_ui=args.no_wait_ui)
+        print('Appliance update complete')
 
-    # Init SSH client
-    client = SSHClient(**ssh_kwargs)
-
-    # create repo file
-    repo_file = "[rhel-updates]\nname=rhel6-updates\nbaseurl=" + args.repo_url + "\nenabled=1\ngpgcheck=0"
-
-    # create repo file on appliance
-    print 'Create update repo file'
-    status, out = client.run_command('echo "%s" >/etc/yum.repos.d/rhel_updates.repo' % repo_file)
-
-    # update
-    print 'Running rhel updates...'
-    status, out = client.run_command('yum update -y --nogpgcheck')
-    print "\n" + out + "\n"
-    if status != 0:
-        print "ERROR during update"
-        sys.exit(1)
-
-
-    # reboot
-    if args.reboot:
-        print 'Appliance reboot'
-        status, out = client.run_command('reboot')
-    else:
-        print 'A reboot is recommended.'
+    return res.rc
 
 
 if __name__ == '__main__':

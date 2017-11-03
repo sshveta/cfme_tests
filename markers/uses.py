@@ -1,4 +1,4 @@
-"""Provides a set of fixtures that can be used to mark tests for filtering on the command-line.
+"""uses_*: Provides a set of fixtures used to mark tests for filtering on the command-line.
 
 Tests using these fixtures directly or indirectly can be filtered using py.test's
 ``-k`` filter argument. For example, run tests that use the ssh client::
@@ -26,8 +26,8 @@ _marks_to_make = [
     'uses_event_listener',
     'uses_providers',
     'uses_pxe',
-    'uses_soap',
     'uses_ssh',
+    'uses_blockers',
 ]
 
 #: List of fixtures that, when used, indicate an appliance is being tested
@@ -40,11 +40,12 @@ appliance_marks = {
 ##
 # Create the fixtures that will trigger test marking
 ##
-markdoc = "Fixture which marks a test with the ``%s`` mark"
+markdoc = "Fixture which marks a test with the ``{}`` mark"
 for mark in _marks_to_make:
-    _markfunc = lambda: None
+    def _markfunc():
+        return None
     # Put on a nice docstring...
-    _markfunc.__doc__ = markdoc % mark
+    _markfunc.__doc__ = markdoc.format(mark)
     globals()[mark] = pytest.fixture(scope="session")(_markfunc)
 
 

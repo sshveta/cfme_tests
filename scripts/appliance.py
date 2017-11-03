@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 """
 Given the name of a provider from cfme_data and an appliance vm name, call the
 corresponding action on that appliance, along with any additional action arguments.
@@ -18,7 +18,7 @@ For example, this will work but not do anyhting helpful:
 import argparse
 import sys
 
-from utils.appliance import Appliance
+from cfme.utils.appliance import Appliance
 
 
 def main():
@@ -39,10 +39,10 @@ def main():
         if isinstance(result, list):
             exit = 0
             for entry in result:
-                print entry
-        elif isinstance(result, str):
+                print(entry)
+        elif isinstance(result, (basestring, int)):
             exit = 0
-            print result
+            print(result)
         elif isinstance(result, bool):
             # 'True' result becomes flipped exit 0, and vice versa for False
             exit = int(not result)
@@ -50,16 +50,37 @@ def main():
             exit = 0
         else:
             # Unknown type, explode
-            raise Exception('Unknown return type for "%s"' % args.action)
+            raise Exception('Unknown return type for "{}"'.format(args.action))
     except Exception as e:
         exit = 1
         exc_type = type(e).__name__
-        if e.message:
-            sys.stderr.write('%s: %s\n' % (exc_type, e.message))
+        if str(e):
+            sys.stderr.write('{}: {}\n'.format(exc_type, str(e)))
         else:
-            sys.stderr.write('%s\n' % exc_type)
+            sys.stderr.write('{}\n'.format(exc_type))
 
     return exit
+
+
+def process_arg(arg):
+    """Parse either number or a well-known values. Otherwise pass through."""
+    try:
+        return int(arg)
+    except ValueError:
+        pass
+    if arg == "True":
+        return True
+    elif arg == "False":
+        return False
+    elif arg == "None":
+        return None
+    else:
+        return arg
+
+
+def process_args(args):
+    """We need to pass more than just strings."""
+    return map(process_arg, args)
 
 
 def call_appliance(provider_name, vm_name, action, *args):
@@ -70,8 +91,12 @@ def call_appliance(provider_name, vm_name, action, *args):
     try:
         call = getattr(appliance, action)
     except AttributeError:
-        raise Exception('Action "%s" not found' % action)
-    return call(*args)
+        raise Exception('Action "{}" not found'.format(action))
+    if isinstance(getattr(type(appliance), action), property):
+        return call
+    else:
+        return call(*process_args(args))
+
 
 if __name__ == '__main__':
     sys.exit(main())

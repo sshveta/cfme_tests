@@ -23,6 +23,22 @@ below.
 
 Some help for setting up the remote selenium server can be found in the :ref:`vnc_selenium` document.
 
+
+Standalone Selenium Server
+--------------------------
+
+A Selenium Server is needed in order to run Remote Selenium WebDriver.  You can install and run
+the Standalone Selenium Server which is a very common method.  Although you may run this locally, it is still setup as a Remote webdriver as described above.  
+
+For more information, view the :ref:`vnc_selenium` document.
+
+
+WebDriver Wharf
+---------------
+
+A variant of the Remote webdriver, WebDriver Wharf will spawn docker containers running the selenium
+standalone server on request.
+
 Remote desired_capabilities
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -93,6 +109,18 @@ Remote
             desired_capabilities:
                 browserName: firefox
 
+WebDriver Wharf
+^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+    browser:
+        webdriver: Remote
+        webdriver_options:
+            desired_capabilities:
+                browserName: firefox
+        webdriver_wharf: http://wharf.host:4899/
+
 Chrome
 ------
 
@@ -121,6 +149,18 @@ Remote
         webdriver_options:
             desired_capabilities:
                 browserName: chrome
+
+WebDriver Wharf
+^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+    browser:
+        webdriver: Remote
+        webdriver_options:
+            desired_capabilities:
+                browserName: chrome
+        webdriver_wharf: http://wharf.host:4899/
 
 Safari
 ------

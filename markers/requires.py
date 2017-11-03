@@ -12,10 +12,12 @@ test item.
 
 import pytest
 
-_no_mark_arg_err = '%s mark required test name or nodeid as first argument'
+_no_mark_arg_err = '{} mark required test name or nodeid as first argument'
+
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", __doc__)
+    config.addinivalue_line("markers", __doc__.splitlines()[0])
+
 
 def _find_test_in_reports(test_id, reports):
     # nodeids end with the test name, so the description of this mark
@@ -25,6 +27,7 @@ def _find_test_in_reports(test_id, reports):
     # anything in between.
 
     return any([report.nodeid.endswith(test_id) for report in reports])
+
 
 def pytest_runtest_setup(item):
     mark = 'requires_test'
@@ -36,7 +39,7 @@ def pytest_runtest_setup(item):
             test_id = item.keywords[mark].args[0]
         except IndexError:
             # mark called incorrectly, explode
-            raise Exception(_no_mark_arg_err % mark)
+            raise Exception(_no_mark_arg_err.format(mark))
 
     reporter = item.config.pluginmanager.getplugin('terminalreporter')
     passed = reporter.stats.get('passed', [])
@@ -48,11 +51,11 @@ def pytest_runtest_setup(item):
         return
 
     if _find_test_in_reports(test_id, failed):
-        error_verb = 'failed' 
+        error_verb = 'failed'
     elif _find_test_in_reports(test_id, skipped):
         error_verb = 'was skipped'
     else:
         error_verb = 'not yet run or does not exist'
 
-    errmsg = 'required test %s %s' % (test_id, error_verb)
+    errmsg = 'required test {} {}'.format(test_id, error_verb)
     pytest.skip(errmsg)

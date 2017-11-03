@@ -1,7 +1,10 @@
 import os
+
 import pytest
-from utils.datafile import data_path_for_filename, load_data_file
-from utils.path import data_path, log_path
+
+from fixtures.terminalreporter import reporter
+from cfme.utils.datafile import data_path_for_filename, load_data_file
+from cfme.utils.path import data_path, log_path
 
 # Collection for storing unique combinations of data file paths
 # and filenames for usage reporting after a completed test run
@@ -59,8 +62,8 @@ def datafile(request):
 
 
 def pytest_addoption(parser):
-    group = parser.getgroup('cfme', 'cfme')
-    group._addoption('--udf-report', action='store_true', default=False,
+    group = parser.getgroup('cfme')
+    group.addoption('--udf-report', action='store_true', default=False,
         dest='udf_report',
         help='flag to generate an unused data files report')
 
@@ -92,9 +95,9 @@ def pytest_sessionfinish(session, exitstatus):
         udf_log_file.write(udf_log + '\n')
 
         # Throw a notice into the terminal reporter to check the log
-        reporter = session.config.pluginmanager.getplugin('terminalreporter')
-        reporter.write_line('')
-        reporter.write_sep(
+        tr = reporter()
+        tr.write_line('')
+        tr.write_sep(
             '-',
             '%d unused data files after test run, check %s' % (
                 len(unused_data_files), udf_log_file.basename

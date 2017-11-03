@@ -22,12 +22,23 @@ lib64
 pip-log.txt
 log/*
 
+# docs inventories
+docs/*.inv
+
+# Docstrings
+doc_data.yaml
+
 # Unit test / coverage reports
 .coverage
 .tox
+
+# pytest cache
+.cache/
+# quickstart virtualenv
+.cfme_tests/
+
 nosetests.xml
 chromedriver.log
-conf/*.yaml
 pytest.ini
 
 # Translations
@@ -39,11 +50,40 @@ pytest.ini
 .project
 .pydevproject
 .settings
+.floo*
+.python-version
+.idea/
 
 # rendered documentation
 docs/_build
 docs/modules
 
 # Ipython notebooks need to be explicitly added
-notebooks/*.ipynb
-notebooks/.ipynb_checkpoints
+notebooks/*
+
+# automation artifacts
+.generated_ssh_key*
+.appliance_template
+.jenkins*
+cfme-qe-yamls
+rhci-qe-data
+
+# pytest cache
+.cache/
+
+# *~ backup files
+*~
+
+# YAML Options
+# exclude conf
+conf/*.yaml
+conf/*.eyaml
+conf/README
+# yaml key
+.yaml_key
+
+# virtual env
+.cfme/
+
+# custom imports
+conf/miq_python_startup.py

@@ -1,0 +1,2 @@
+# temporary backward compat
+-r ../requirements/docs.txt

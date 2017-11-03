@@ -1,38 +1,4 @@
-cartouche
-boto
-bottle
-bottle-sqlite
-flake8
-ipython
-Jinja2
-ovirt-engine-sdk-python
-paramiko
-py
-PyPDF2
-pysphere
-pytest
-python-dateutil
-python-novaclient
-PyYAML
-requests
-scp
-selenium
-multimethods.py
-sqlalchemy
-suds
-tornado
-UnittestZero
-ui-navigate
-
-###
-# Libraries with compiled components, and their related devel packages
-###
-
-# lxml super SGML parser, needs libxml2-devel and libxslt-devel
-lxml
-
-# Postgres client bindings, needs postgresql-devel
-psycopg2
-
-# zeromq bindings, for ipython, needs zeromq3-devel
-pyzmq
+# this file is there for backward compatibility, it will be taken away after prt updates
+-r requirements/frozen.txt
+# do editable self-install to avoid need for pythonpath changes
+-e .

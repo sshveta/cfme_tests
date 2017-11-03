@@ -1,30 +1,55 @@
 import pytest
-from cfme import dashboard
-from cfme.login import login_admin, login, logout
-from cfme.login import page as login_page
-from utils import conf
+
+from cfme import test_requirements
+from cfme.base.credential import Credential
+from cfme.configure.access_control import User
+from cfme.utils.appliance import ViaSSUI, ViaUI
+from cfme.utils import conf, error, version
 
 pytestmark = pytest.mark.usefixtures('browser')
 
 
-def test_login():
+@test_requirements.drift
+@pytest.mark.tier(1)
+@pytest.mark.sauce
+@pytest.mark.smoke
+@pytest.mark.parametrize('context, method', [(ViaUI, 'click_on_login'),
+                                             (ViaUI, 'press_enter_after_password'),
+                                             (ViaUI, '_js_auth_fn'),
+                                             (ViaSSUI, 'click_on_login'),
+                                             (ViaSSUI, 'press_enter_after_password')])
+@pytest.mark.uncollectif(lambda context: context == ViaSSUI and
+                         version.current_version() == version.UPSTREAM)
+def test_login(context, method, appliance):
     """ Tests that the appliance can be logged into and shows dashboard page. """
-    pytest.sel.get(pytest.sel.base_url())
-    login_admin()
-    assert dashboard.page.is_displayed(), "Could not determine if logged in"
+
+    with appliance.context.use(context):
+        logged_in_page = appliance.server.login()
+        assert logged_in_page.is_displayed
+        logged_in_page.logout()
+
+        logged_in_page = appliance.server.login_admin(method=method)
+        assert logged_in_page.is_displayed
+        logged_in_page.logout()
 
 
-def test_bad_password():
+@test_requirements.drift
+@pytest.mark.tier(2)
+@pytest.mark.sauce
+@pytest.mark.parametrize('context', [ViaUI])
+def test_bad_password(context, request, appliance):
     """ Tests logging in with a bad password. """
-    pytest.sel.get(pytest.sel.base_url())
-    login(conf.credentials['default']['username'], "badpassword@#$")
-    expected_error = 'the username or password you entered is incorrect'
-    assert login_page.is_displayed()
-    assert expected_error in pytest.sel.text(login_page.flash)
 
+    username = conf.credentials['default']['username']
+    password = "badpassword@#$"
+    cred = Credential(principal=username, secret=password)
+    user = User(credential=cred)
+    user.name = 'Administrator'
+    if appliance.version.is_in_series('5.7'):
+        error_message = "Sorry, the username or password you entered is incorrect."
+    else:
+        error_message = "Incorrect username or password"
 
-@pytest.sel.go_to('dashboard')
-def test_logout(logged_in):
-    """ Testst that the provder can be logged out of. """
-    logout()
-    assert login_page.is_displayed()
+    with appliance.context.use(context):
+        with error.expected(error_message):
+            appliance.server.login(user)

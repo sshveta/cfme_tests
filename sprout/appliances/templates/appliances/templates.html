@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Providers{% endblock %}
+{% block body %}
+<ul class="nav nav-tabs">
+{% for group in groups %}
+    <li {% if group.id == group_id %}class="active"{% endif %}><a href={% url 'group_templates' group.id %}>{{group.id}} ({{ group.existing_templates|length }})</a></li>
+{% endfor %}
+</ul>
+
+<table class="table">
+    <thead>
+        <th>Stream</th>
+        <th>Version</th>
+        <th>Date</th>
+        <th>Provider</th>
+        <th>Name</th>
+        <th>Configured</th>
+        <th>Actions</th>
+    </thead>
+    <tbody>
+        {% for zstream, version, date, datetuple, provider, template in prepared_table %}
+        <tr id="{{ template.id }}">
+            {% if zstream %}<td rowspan={{ zstream_rowspans|keyvalue:zstream }}>{{ zstream }}</td>{% endif %}
+            {% if version %}<td rowspan={{ version_rowspans|keyvalue:version }}>{{ version }}</td>{% endif %}
+            {% if date %}<td rowspan={{ date_version_rowspans|keyvalue:datetuple }}>{{ date }}</td>{% endif %}
+            <td><a href="{% url 'specific_provider' provider.id %}#template-{{ template.id }}">{{ provider.id }}</a></td>
+            <td>
+                {% if template.suggested_delete %}<strong>{% endif %}
+                {{ template.name }}{% if template.ga_released %}<strong> (GA)</strong>{% endif %}{% if template.parent_template and template.parent_template.exists_and_ready %} (<a href="#{{ template.parent_template.id }}">parent</a>){% endif %}
+                {% if template.suggested_delete %}</strong>{% endif %}
+            </td>
+            <td><span class="glyphicon glyphicon-{% if template.preconfigured %}ok{% else %}remove{% endif %}"></span></td>
+            <td>
+                {% if template.suggested_delete %}
+                    <button class="btn btn-danger btn-xs delete-template" data-template="{{ template.id }}" id="button-{{ template.id }}"><span class="glyphicon glyphicon-trash"></span> Delete from provider</button>
+                    <span class="spinner spinner-xs spinner-inline" id="spinner-{{ template.id }}"></span>
+                {% else %}
+                    <em>No actions suggested</em>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script type="text/javascript">
+$(document).ready(function() {
+    function waitForDeletionFinish(template, task_id){
+        $.ajax({
+            type: "POST",
+            url: "{% url 'task_result' %}",
+            dataType: "json",
+            data: JSON.stringify({task_id: task_id}),
+        }).done(function(data){
+            if(data === null){
+                // Still waiting
+                setTimeout(function(){ waitForDeletionFinish(template, task_id); }, 1000);
+            } else if(data === true) {
+                addAlert("success", "Deletion of the template " + template + " was successfully finished.");
+                $("#spinner-" + template).hide();
+            } else if(data === false){
+                addAlert("danger", "Failed to delete template " + template);
+                $("#spinner-" + template).hide();
+                $("#button-" + template).show();
+            } else {
+                addAlert("danger", "Unexpected response " + data + " while deleting template " + template);
+                $("#spinner-" + template).hide();
+                $("#button-" + template).show();
+            }
+        }).fail(function(xhr, textStatus, errorThrown){
+            addAlert("danger", "Error during deleting the template " + template + ": '" + xhr.responseText + "'.");
+            $("#spinner-" + template).hide();
+            $("#button-" + template).show();
+        });
+    }
+
+    $(".spinner").hide();
+    // Template deletion
+    $('button.delete-template').click(function(){
+        var e = $(this);
+        var template = e.attr("data-template");
+        $("#spinner-" + template).show();
+        $("#button-" + template).hide();        
+        $.ajax({
+            type: "POST",
+            url: "{% url 'delete_template_provider' %}",
+            data: {template_id: template},
+            dataType: 'html'
+        }).done(function(data){
+            addAlert("info", "Deletion of the template " + template + " from provider initiated");
+            waitForDeletionFinish(template, data);
+        }).fail(function(xhr, textStatus, errorThrown){
+            addAlert("danger", "Error during template delete request " + template + ": '" + xhr.responseText + "'.");
+            $("#spinner-" + template).hide();
+            $("#button-" + template).show();
+        })
+    });
+})
+</script>
+{% endblock %}

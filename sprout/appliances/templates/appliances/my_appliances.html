@@ -1,0 +1,636 @@
+{% extends "base.html" %}
+{% load staticfiles %}
+{% block title %}My appliances{% endblock %}
+{% block additional_js %}
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.5.8/angular.min.js" integrity="sha256-6Sr0HqNgUf/p88g6vsl87CrAnNqiOWhjlY6LS8jeWHA=" crossorigin="anonymous"></script>
+<script src={% static "app-js/my_appliances.js" %}></script>
+{% endblock %}
+{% block body-script %}
+<script type="text/javascript">
+// some useful functions
+function selectValues(select_id) {
+    return $.map($('#' + select_id + ' option'), function(option) { return option.value; });
+}
+
+function selectHasValue(select_id, searched_value) {
+    var values = selectValues(select_id);
+    for(i = 0; i < values.length; i++) {
+        var value = values[i];
+        if(value == searched_value)
+            return true;
+    }
+
+    return false;
+}
+
+function replaceSelectContents(name, data, submit_handling) {
+    if(submit_handling === undefined) submit_handling = false;
+    var old_val = $('select#' + name).val();
+    $('select#' + name).html(data);
+    if(selectHasValue(name, old_val))
+        $('select#' + name).val(old_val);
+    if(submit_handling){
+        if($("#" + name).find("option").length <= 1) {
+            // No items available
+            $("#submit_button")[0].disabled = true;
+        } else {
+            // Items available
+            $("#submit_button")[0].disabled = false;
+        }
+    }
+    $('select#' + name).selectpicker('refresh');
+    $('select#' + name).trigger('change');
+    $('#' + name).prop('disabled', false);
+    $('select#' + name).selectpicker('refresh');
+}
+
+$(document).ready(function() {
+    // UI setup
+    $('select.selectpicker').selectpicker();
+
+    // Description setting
+    $('button.set-pool-desc').click(function(){
+        var e = $(this);
+        var poolid = e.attr("data-poolid");
+        var input = document.getElementById("pool-desc-" + poolid);
+        var description = input.value;
+        $.ajax({
+            type: "POST",
+            url: "{% url 'set_pool_description' %}",
+            data: {pool_id: poolid, description: description},
+            dataType: 'html'
+        }).done(function(data){
+            addAlert("success", "Description of the pool " + poolid + " set to '" + description + "'.");
+        }).fail(function(xhr, textStatus, errorThrown){
+            addAlert("danger", "Error during setting of the description of the pool " + poolid + ": '" + xhr.responseText + "'.");
+        })
+    });
+    
+    $('select#view_user').change(function(){
+        var url = $('select#view_user').val();
+        if(url != "")
+            window.location.href = url;
+    });
+    // Some UI stuff
+    $('#enabled_ram').change(function(){
+        var e = $(this);
+        if(e.is(':checked')){
+            $('#ram').prop('disabled', false);
+        } else {
+            $('#ram').prop('disabled', true);
+        }
+    });
+    $('#enabled_cpu').change(function(){
+        var e = $(this);
+        if(e.is(':checked')){
+            $('#cpu').prop('disabled', false);
+        } else {
+            $('#cpu').prop('disabled', true);
+        }
+    });
+    // Provisioning
+    $('select#stream').change(function(){
+        $('#version').prop('disabled', true);
+        $.ajax({
+                type: "POST",
+                url: "{% url 'versions_for_group' %}",
+                data: {stream: $('select#stream').val(), preconfigured: $("#preconfigured").is(":checked"), container: $("#container").is(":checked")},
+                dataType: 'html'
+         }).done(function(data){
+            replaceSelectContents('version', data)
+         });
+    });
+    $('#preconfigured').change(function(){
+        $("select#stream").trigger("change");  // a bit stupid but no better idea right now
+    });
+    $('#container').change(function(){
+        if($("#container").is(":checked")){
+            $('#preconfigured').prop('checked', true);
+            $('#preconfigured').prop('disabled', true);
+        } else {
+            $('#preconfigured').prop('disabled', false);
+        }
+        $("select#stream").trigger("change");  // a bit stupid but no better idea right now
+    });
+    $('select#version').change(function(){
+        $('#date').prop('disabled', true);
+        $.ajax({
+                type: "POST",
+                url: "{% url 'date_for_group_and_version' %}",
+                data: {stream: $('select#stream').val(), version: $('select#version').val(), preconfigured: $("#preconfigured").is(":checked"), container: $("#container").is(":checked")},
+                dataType: 'html'
+         }).done(function(data){
+            replaceSelectContents('date', data)
+         });
+    });
+    $('select#date').change(function(){
+        $('#provider').prop('disabled', true);
+        $.ajax({
+                type: "POST",
+                url: "{% url 'providers_for_date_group_and_version' %}",
+                data: {stream: $('select#stream').val(), version: $('select#version').val(), date: $('select#date').val(), preconfigured: $("#preconfigured").is(":checked"), container: $("#container").is(":checked")},
+                dataType: 'html'
+         }).done(function(data){
+            replaceSelectContents('provider', data, true)
+         });
+    });
+
+    // Initialize the button
+    $("select#stream").trigger("change");
+});
+</script>
+{% endblock %}
+{% block body %}
+<div ng-app="myAppliancesApp" ng-cloak>
+
+{% if not request.user.is_superuser %}
+    <h2>Listing and operation of your appliances</h2>
+{% else %}
+    <h2>Listing and operation of {% if show_user == "my" %}my{% else %}{{ show_user }}'s{% endif %} appliances</h2>
+    <h3>Switch to:</h3>
+    <div style="width: 320px; margin: 10px 10px 10px 10px;">
+        <select id="view_user" class="selectpicker" data-live-search="true" data-size="6">
+            <option value="">Select an user ...</option>
+        {% if show_user != "my" %}
+            <option value="{% url 'my_appliances' %}">My appliances</option>
+        {% endif %}
+        {% if show_user != "all" %}
+            <option value="{% url 'all_appliances' %}">All appliances</option>
+        {% endif %}
+        {% for user in other_users %}
+            {% if user.id != show_user %}
+                <option value="{% url 'user_appliances' user.username %}">{{ user|user_repr }}</option>
+            {% endif %}
+        {% endfor %}
+        </select>
+    </div>
+{% endif %}
+
+{% if can_order_pool %}
+    <p><button class="btn btn-success{% if not new_pool_possible %} disabled{% endif %}" {% if new_pool_possible %}data-toggle="modal" data-target="#myModal"{% endif %}{% if not new_pool_possible %} title="You reached the limit of your account, no more pools"{% endif %}><span class="glyphicon glyphicon-plus"></span> Request appliances</button>
+    <a href="{% url 'kill_all_pools' user.id %}" class="btn btn-danger{% if not pools %} disabled{% endif %}" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-remove"></span> Terminate all pools.</a></p>
+{% endif %}
+
+{% if pools_paginator.num_pages > 1 %}
+<h4>{{per_page}} pools per page.</h4>
+<ul class="pagination">
+    {% if pools_paged.has_previous %}
+    <li>
+        <a href="{% url 'user_appliances' show_user %}?page={{ pools_paged.previous_page_number }}&per_page={{per_page}}" aria-label="Previous">
+            <span class="i fa fa-angle-left"></span>
+        </a>
+    </li>
+    {% else %}
+    <li class="disabled">
+        <a href="#" aria-label="Previous"><span class="i fa fa-angle-left"></span></a>
+    </li>
+    {% endif %}
+    {% for i_page in pages %}
+    <li {% if i_page == page %}class="active"{% endif %}>
+        <a href="{% url 'user_appliances' show_user %}?page={{ i_page }}&per_page={{per_page}}">
+            {{ i_page }}
+        </a>
+    </li>
+    {% endfor %}
+    {% if pools_paged.has_next %}
+    <li>
+        <a href="{% url 'user_appliances' show_user %}?page={{ pools_paged.next_page_number }}&per_page={{per_page}}" aria-label="Next">
+            <span class="i fa fa-angle-right"></span>
+        </a>
+    </li>
+    {% else %}
+    <li class="disabled">
+        <a href="#" aria-label="Next"><span class="i fa fa-angle-right"></span></a>
+    </li>
+    {% endif %}
+</ul>
+{% endif %}
+
+
+{% for pool in pools_paged %}
+    <div class="panel panel-primary" id="pool-{{ pool.id }}">
+        <div class="panel-heading">
+            <h2>#{{pool.id}} (<em>{{ pool.group.id }}</em>){% if pool.is_container %} (containers){% endif %}{% if pool.yum_update %} with YUM updated appliances{% endif %} - {% if pool.preconfigured %}Configured{% else %}Unconfigured{% endif %}{% if pool.description %} - "{{ pool.description }}"{% endif %} | 
+            {% if pool.version %}
+                Version: {{ pool.version }}
+            {% endif %}
+            {% if pool.date %}
+                Date: {{ pool.date }}
+            {% endif %}
+            </h2>
+            {% if pool.override_memory and pool.override_cpu %}
+            <h2>
+                With {{ pool.override_memory }} MB RAM and {{ pool.override_cpu }} cores
+            </h2>
+            {% elif pool.override_memory %}
+            <h2>
+                With {{ pool.override_memory }} MB RAM
+            </h2>
+            {% elif pool.override_cpu %}
+            <h2>
+                With {{ pool.override_cpu }} cores
+            </h2>
+            {% endif %}
+            <h3>Age: {{pool.age|nice_timedelta}}</h3>
+            {% if pool.current_count != pool.total_count %}
+                <p>{{ pool.current_count }} from {{ pool.total_count }} appliances provisioned</p>
+            {% endif %}
+            {% if not pool.finished %}
+            <table>
+                <tr>
+                    <td>Delayed provisioning tasks:</td>
+                    <td>{{ pool.num_delayed_provisioning_tasks }}</td>
+                    <td>{% if pool.num_delayed_provisioning_tasks == 0 %}<span class="glyphicon glyphicon-ok"></span>{% else %}<span class="glyphicon glyphicon-remove"></span>{% endif %}</td>
+                </tr>
+
+                <tr>
+                    <td>Number of queued provisioning tasks before your tasks:</td>
+                    <td>{{ pool.num_provisioning_tasks_before }}</td>
+                    <td>{% if pool.num_provisioning_tasks_before == 0 %}<span class="glyphicon glyphicon-ok"></span>{% else %}<span class="glyphicon glyphicon-remove"></span>{% endif %}</td>
+                </tr>
+
+                <tr>
+                    <td>Free provisioning slots:</td>
+                    <td>{{ pool.num_possible_provisioning_slots }}</td>
+                    <td>{% if pool.num_possible_provisioning_slots > 0 %}<span class="glyphicon glyphicon-ok"></span>{% else %}<span class="glyphicon glyphicon-remove"></span>{% endif %}</td>
+                </tr>
+
+                <tr>
+                    <td>Free appliance slots:</td>
+                    <td>{{ pool.num_possible_appliance_slots }}</td>
+                    <td>{% if pool.num_possible_appliance_slots > 0 %}<span class="glyphicon glyphicon-ok"></span>{% else %}<span class="glyphicon glyphicon-remove"></span>{% endif %}</td>
+                </tr>
+
+                <tr>
+                    <td>Shepherd-available appliances:</td>
+                    <td>{{ pool.num_shepherd_appliances }}</td>
+                    <td>{% if pool.num_shepherd_appliances > 0 %}<span class="glyphicon glyphicon-ok"></span>{% else %}<span class="glyphicon glyphicon-remove"></span>{% endif %}</td>
+                </tr>
+            </table>
+            {% endif %}
+            {% if show_user == "all" %}
+                <h4><a href="{% url 'user_appliances' pool.owner.username %}">{{ pool.owner|user_repr }}</a></h4>
+            {% endif %}
+        </div>
+        {% if pool.total_count > 0 and not pool.broken_with_no_appliances %}
+        <table class="table table-striped table-hover">
+            <thead>
+                <tr>
+                    <th class="col-md-1">ID &amp; IP</th>
+                    <th class="col-md-3">Name</th>
+                    <th class="col-md-1">Provider</th>
+                    <th class="col-md-1">Swap</th>
+                    <th class="col-md-1">Manages</th>
+                    <th class="col-md-2">Status</th>
+                    <th class="col-md-1">Power state:</th>
+                    <th class="col-md-1">Expiration</th>
+                    <th class="col-md-1">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for appliance in pool.appliances %}
+                <tr id="appliance-{{ appliance.id }}">
+                    <td class="col-md-1">
+                        <small>{{ appliance.id }}</small>
+                        <br>
+                        {% if appliance.ip_address %}
+                             <small><a href="https://{{ appliance.ip_address }}/" target="_blank" title="{{ appliance.ip_address }}">{{ appliance.ip_address }}</a></small>
+                        {% else %}
+                            <small>---</small>
+                        {% endif %}
+                    </td>
+                    <!-- There's gotta be a better way to do this angular thing, but that probably involves REST. -->
+                    {% if appliance.provider.allow_renaming %}
+                        <td style=" overflow: auto;" ng-controller="EditVmName" ng-init="applianceId = '{{ appliance.id }}'; apiURL = '{% url 'rename_appliance' %}'; taskResultURL = '{% url 'task_result' %}'; applianceOriginalName = '{{ appliance.name }}'; applianceHasUUID = {{ appliance.has_uuid_angular }} ;" class="col-md-3">
+                            <div ng-hide="editing" ng-click="edit()">
+                                    {[{ vm.name }]}
+                            </div>
+                            <div ng-show="editing">
+                                <input ng-model="vm.name" ng-disabled="submitting">
+                                <a href="#" class="btn btn-success btn-xs" ng-click="save(vm)" ng-hide="submitting"><span class="glyphicon glyphicon-ok"></span></a>
+                                <a href="#" class="btn btn-danger btn-xs" ng-click="cancel()" ng-hide="submitting"><span class="glyphicon glyphicon-remove"></span></a>
+                                <span class="spinner spinner-xs spinner-inline" ng-show="submitting"></span>
+                            </div>
+                        </td>
+                    {% else %}
+                        <td title="Cannot rename because provider does not allow it" class="col-md-2">
+                        {% if appliance.vnc_link %}<a href="{{ appliance.vnc_link }}" target="_blank"><img src={% static "img/console.png" %}></a>{% endif %}
+                        {{ appliance.name }}
+                        </td>
+                    {% endif %}
+                    <td class="col-md-1">
+                        <strong><a href="{% url 'specific_provider' appliance.template.provider.id %}">{{ appliance.template.provider.id }}</a></strong>
+                    </td>
+                    <td class="col-md-1">
+                            {% if appliance.ssh_failed %}
+                                <strong style="color: red;">SSH FAIL!</strong>
+                            {% elif appliance.swap > 0 %}
+                                <span style='color: red;'>{{ appliance.swap }} MB</span>
+                            {% else %}
+                                OK
+                            {% endif %}
+                    </td>
+                    <td class="col-md-1">
+                        {% if appliance.managed_providers %}
+                            {% for provider in appliance.managed_providers %}
+                                <small><em><a href="{% url 'specific_provider' provider %}">{{provider}}</a></em></small><br>
+                            {% endfor %}
+                        {% else %}
+                            ---
+                        {% endif %}
+                    </td>
+                    <td class="col-md-2" style="overflow-x: auto;{% if appliance.ready %} background-color: green;{% else %} background-color: red;{% endif %}">
+                        {{ appliance.status }}
+                    </td>
+                    <td class="col-md-1">{{ appliance.power_state|power_icon }}</td>
+                    <td class="col-md-1"><span title="Age: {{ appliance.age|nice_timedelta }}">{{ appliance.expires_in }}</span></td>
+                    <td class="col-md-1">
+
+                        <div class="dropdown">
+                          <button class="btn btn-default dropdown-toggle" type="button" id="appliance-dropdown-{{appliance.id}}" data-toggle="dropdown">
+                            Actions
+                            <span class="caret"></span>
+                          </button>
+                          <ul class="dropdown-menu" role="menu" aria-labelledby="appliance-dropdown-{{appliance.id}}">
+                            <li role="presentation">
+                                {% if appliance.vnc_link %}
+                                    <a role="menuitem" class="btn btn-xs" tabindex="-1" href="{{ appliance.vnc_link }}" target="_blank" title="Open the VNC console for {{appliance.name}}"><span class="glyphicon glyphicon-log-in"></span>Open the VNC console</a>
+                                {% else %}
+                                    <a role="menuitem" class="btn btn-xs disabled" tabindex="-1" href="#"><span class="glyphicon glyphicon-log-in"></span>Open the VNC console</a>
+                                {% endif %}
+                            </li>
+                            <li role="presentation">
+                                {% if appliance.can_launch %}
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'start' %}" class="btn btn-success btn-xs" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-off"></span> Launch</a>
+                                {% else %}
+                                    <a role="menuitem" tabindex="-1" href="#" class="btn btn-success btn-xs disabled"><span class="glyphicon glyphicon-off"></span> Launch</a>
+                                {% endif %}
+                            </li>
+                            <li role="presentation">
+                                {% if appliance.can_stop %}
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'stop' %}" class="btn btn-danger btn-xs" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-off"></span> Stop</a>
+                                {% else %}
+                                    <a role="menuitem" tabindex="-1" href="#" class="btn btn-danger btn-xs disabled"><span class="glyphicon glyphicon-off"></span> Stop</a>
+                                {% endif %}
+                            </li>
+                            <li role="presentation">
+                                {% if appliance.can_reboot %}
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'reboot' %}" class="btn btn-warning btn-xs" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-repeat"></span> Reboot</a>
+                                {% else %}
+                                    <a role="menuitem" tabindex="-1" href="#" class="btn btn-warning btn-xs disabled"><span class="glyphicon glyphicon-repeat"></span> Reboot</a>
+                                {% endif %}
+                            </li>
+                            <li role="presentation">
+                                {% if appliance.can_suspend %}
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'suspend' %}" class="btn btn-warning btn-xs" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-pause"></span> Suspend</a>
+                                {% else %}
+                                    <a role="menuitem" tabindex="-1" href="#" class="btn btn-warning btn-xs disabled"><span class="glyphicon glyphicon-pause"></span> Suspend</a>
+                                {% endif %}
+                            </li>
+                            <li role="presentation" class="divider"></li>
+                            <li role="presentation">
+                                <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'kill' %}" class="btn btn-danger btn-xs" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-remove-sign"></span> Kill</a>
+                            </li>
+                            {% if not appliance.marked_for_deletion %}
+                                <li role="presentation">
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'set_lease' 30 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 30m</a>
+                                </li>
+                                <li role="presentation">
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'set_lease' 60 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 1h</a>
+                                </li>
+                                <li role="presentation">
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'set_lease' 240 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 4h</a>
+                                </li>
+                                <li role="presentation">
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'set_lease' 1440 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 1d</a>
+                                </li>
+                                <li role="presentation">
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'set_lease' 10080 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 1w</a>
+                                </li>
+                                <li role="presentation" class="divider"></li>
+                                <li role="presentation">
+                                {% if appliance.leased_until and request.user.is_superuser %}
+                                    <a role="menuitem" tabindex="-1" href="{% url 'appliance_action' appliance.id 'dont_expire' %}" class="btn btn-danger btn-xs" onclick="return confirm('Are you sure? This means the appliances wont get deleted automatically')"><span class="glyphicon glyphicon-ban-circle"></span> Don't expire</a>
+                                {% else %}
+                                    <a role="menuitem" tabindex="-1" href="#" class="btn btn-danger btn-xs disabled" onclick="return alert('This functionality is only for super users.')"><span class="glyphicon glyphicon-ban-circle"></span> Don't expire</a>
+                                {% endif %}
+                                </li>
+                            {% endif %}
+                          </ul>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            </table>
+            {% elif pool.broken_with_no_appliances %}
+                <div class="container">
+                <h2>This pool appears to be broken.</h2>
+                <a href="{% url 'delete_pool' pool.id %}" class="btn btn-danger btn-lg" onclick="return confirm('Are you sure you want to delete the pool?')"><span class="glyphicon glyphicon-trash"></span> DESTROY!</a>
+                </div>
+            {% else %}
+                <div class="container">
+                <h2>Clone this pool!</h2>
+                <form action="{% url 'clone_pool' %}" method="POST" class="form-horizontal">
+                    {% csrf_token %}
+                    <input type="hidden" name="source_pool_id" value="{{pool.id}}">
+                    <div class="form-group">
+                      <label for="count" class="col-md-2 control-label">Number of appliances wanted:</label>
+                      <div class="col-md-4">
+                        <input type="number" class="form-control" id="count" name="count" min="1" value="1" {% if per_pool_quota_enabled %}max="{{per_pool_quota}}"{% endif %}>
+                      </div>
+                    </div>
+                    <button class="btn btn-primary btn-lg" onclick="return confirm('Are you sure?')"><span class="glyphicon glyphicon-star-empty"></span> Clone</button>
+                </form>
+                </div>
+            {% endif %}
+            <hr>
+            <div class="form-horizontal">
+                <button class="btn btn-default btn-xs" data-toggle="collapse" data-target="#collapsible-{{ pool.id }}" style="margin-left: 10px; margin-bottom: 10px;"><span class="glyphicon glyphicon-arrow-down"></span> Open additional settings</button>
+
+                <div id="collapsible-{{ pool.id }}" class="collapse">
+                    <div class="form-group">
+                        <label for="pool-desc-{{ pool.id }}" class="col-sm-1 control-label">Description</label>
+                        <div class="col-sm-2">
+                            <input id="pool-desc-{{ pool.id }}" name="pool-desc-{{ pool.id }}" value="{{ pool.description }}" class="form-control">
+                        </div>
+                        <div class="col-sm-1">
+                            <button class="btn btn-primary btn-xs set-pool-desc" data-poolid="{{ pool.id }}"><span class="glyphicon glyphicon-floppy-save"></span> Set</button>
+                        </div>
+                        {% if pool.possible_other_owners %}
+                        <form action="{% url 'transfer_pool' %}" method="POST" style="display: inline;">
+                            {% csrf_token %}
+                            <input type="hidden" name="pool_id" value="{{ pool.id }}">
+                            <label for="pool-own-{{ pool.id }}" class="col-sm-1 control-label">Transfer ownership:</label>
+                            <div class="col-sm-2">
+                                <select name="user_id" class='select-user selectpicker' data-live-search="true" data-size="6">
+                                {% for user in pool.possible_other_owners %}
+                                    <option value="{{ user.id }}">{{ user|user_repr }}</option>
+                                {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-sm-1">
+                                <input type="submit" class="btn btn-success btn-sm" value="Transfer!" onclick="return confirm('Are you sure?')">
+                            </div>
+                        </form>
+                        {% endif %}
+
+                    </div>
+                </div>
+
+                {% if not pool.finished %}
+                    <div class="form-group">
+                        <label for="pool-progress-{{ pool.id }}" class="col-md-1 control-label">Progress</label>
+                        <div class="col-md-4">
+                            {{ pool.percent_finished|progress }}
+                        </div>
+                        <div class="col-md-2">
+                           {% if pool.fulfilled %}
+                                <span class="glyphicon glyphicon-ok"></span> Fulfilled
+                            {% else %}
+                                <span class="glyphicon glyphicon-remove"></span> Not fulfilled
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endif %}
+
+
+                {% if not pool.single_or_none_appliance %}
+                <div class="form-group">
+                    <label for="pool-ops-{{ pool.id }}" class="col-md-1 control-label">Pool operations</label>
+                    <div class="col-md-4">
+                        <a href="{% url 'kill_pool' pool.id %}" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure?')" style="display: inline;"><span class="glyphicon glyphicon-trash"></span> Terminate entire pool</a>
+                        {% if not pool.not_needed_anymore %}
+                        <a href="{% url 'prolong_lease_pool' pool.id 30 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 30m</a>
+                        <a href="{% url 'prolong_lease_pool' pool.id 60 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 1h</a>
+                        <a href="{% url 'prolong_lease_pool' pool.id 240 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 4h</a>
+                        <a href="{% url 'prolong_lease_pool' pool.id 1440 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 1d</a>
+                        <a href="{% url 'prolong_lease_pool' pool.id 10080 %}" class="btn btn-success btn-xs"><span class="glyphicon glyphicon-time"></span> 1w</a>
+                        {% if request.user.is_superuser %}
+                            <a href="{% url 'dont_expire_pool' pool.id %}" class="btn btn-danger btn-xs" onclick="return confirm('Are you sure? This means the appliances wont get deleted automatically')"><span class="glyphicon glyphicon-ban-circle"></span> Don't expire</a>
+                        {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+
+            </div>
+            
+    </div>
+{% endfor %}
+<div class="modal fade" id="myModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-hidden="true">
+          <span class="pficon pficon-close"></span>
+        </button>
+        <h4 class="modal-title" id="myModalLabel">Requesting additional pools{% if pools_remaining %} ({{pools_remaining}} remaining){% endif %}</h4>
+      </div>
+      <div class="modal-body">
+        <form action="{% url 'request_pool' %}" method="POST" class="form-horizontal">
+            {% csrf_token %}
+            <div class="form-group">
+              <label for="stream" class="col-sm-3 control-label">Select stream:</label>
+              <div class="col-sm-8">
+                  <select class="form-control selectpicker" id="stream" name="stream" data-live-search="true" data-size="6">
+                    <option value="<None>">Please select ...</option>
+                    {% for date, group in group_tuples %}
+                    <option value="{{ group.id }}">{{ group.id }} ({{ date}})</option>
+                    {% endfor %}
+                  </select>
+              </div>
+            </div>
+            <div class="form-group">
+                <label for="preconfigured" class="col-sm-3 control-label">Preconfigured?:</label>
+                <div class="col-sm-2">
+                    <div class="checkbox">
+                      <label>
+                        <input type="checkbox" class="form-control" id="preconfigured" name="preconfigured" value="true" checked>
+                      </label>
+                    </div>
+                </div>
+                <label for="container" class="col-sm-2 control-label">Container?:</label>
+                <div class="col-sm-2">
+                    <div class="checkbox">
+                      <label>
+                        <input type="checkbox" class="form-control" id="container" name="container" value="true">
+                      </label>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="yum_update" class="col-sm-3 control-label">YUM updated?:</label>
+                <div class="col-sm-8">
+                    <div class="checkbox">
+                      <label>
+                        <input type="checkbox" class="form-control" id="yum_update" name="yum_update" value="true" disabled="true">
+                      </label>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+              <label for="version" class="col-sm-3 control-label">Select version:</label>
+              <div class="col-sm-3">
+                  <select class="form-control selectpicker" id="version" name="version" data-live-search="true" data-size="6">
+                    <option value="latest">Latest</option>
+                  </select>
+                </div>
+              <label for="date" class="col-sm-2 control-label">Build date:</label>
+              <div class="col-sm-3">
+                  <select class="form-control selectpicker" id="date" name="date" data-live-search="true" data-size="6">
+                    <option value="latest">Latest</option>
+                  </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="provider" class="col-sm-3 control-label">Select specific provider:</label>
+              <div class="col-sm-8">
+                  <select class="form-control selectpicker" id="provider" name="provider" data-live-search="true" data-size="6">
+                    <option value="any">Any provider (recommended option!)</option>
+                  </select>
+                  <em>The meaning of the numbers in parentheses are: Remaining provisioning slots, Remaining appliance slots and Number of such appliances in shepherd. Use only in the case when you really need a specific provider. In every other case, leave the choice to Sprout!</em>
+                </div>
+            </div>
+            <div class="form-group">
+              <label for="count" class="col-sm-3 control-label">Number of appliances wanted:</label>
+              <div class="col-sm-8">
+                <input type="number" class="form-control" id="count" name="count" min="1" value="1" {% if per_pool_quota_enabled %}max="{{per_pool_quota}}"{% endif %}>
+              </div>
+            </div>
+            <div class="form-group" {% if not can_change_hw %}onclick="alert('You need special permissions for changing HW params.');"{% endif %}>
+              <label for="ram" class="col-sm-3 control-label">Change RAM:</label>
+              <div class="col-sm-1">
+                <input type="checkbox" class="form-control" id="enabled_ram" name="enabled_ram" {% if not can_change_hw %}disabled{% endif %}>
+              </div>
+              <div class="col-sm-2">
+                <input type="number" class="form-control" id="ram" name="ram" min="8192" value="8192" disabled>
+              </div>
+              <label for="cpu" class="col-sm-1 control-label">CPU:</label>
+              <div class="col-sm-1">
+                <input type="checkbox" class="form-control" id="enabled_cpu" name="enabled_cpu" {% if not can_change_hw %}disabled{% endif %}>
+              </div>
+              <div class="col-sm-2">
+                <input type="number" class="form-control" id="cpu" name="cpu" min="2" value="4" disabled>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="exp_hours" class="col-sm-3 control-label">Expiration:</label>
+              <div class="col-sm-9" ng-controller="EditExpiration">
+                Default? <input type="checkbox" id="exp_default" name="exp_default" ng-model="defaultTimeout"><br>
+                <input type="number" id="exp_days" name="exp_days" min="0" max="7" ng-model="expDays" ng-disabled="defaultTimeout" ng-change="updateForm()"> D
+                <input type="number" id="exp_hours" name="exp_hours" min="0" max="24" ng-model="expHours" ng-disabled="defaultTimeout" ng-change="updateForm()"> H
+                <input type="number" id="exp_mins" name="exp_mins" min="0" max="59" ng-model="expMins" ng-disabled="defaultTimeout" ng-change="updateForm()"> M
+                <input type="hidden" id="expiration" name="expiration" ng-model="expiration" value="{[{ expiration }]}"> <strong> = {[{ expiration }]} minutes</strong>
+              </div>
+            </div>
+            <button class="btn btn-primary btn-lg" onclick="return confirm('Are you sure?')" id="submit_button"><span class="glyphicon glyphicon-star-empty"></span> Gimme one!</button>
+        </form>
+      </div>
+      <div class="modal-footer">
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+{% endblock %}

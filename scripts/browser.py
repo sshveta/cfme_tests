@@ -1,9 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 from IPython import embed
 
-from fixtures import navigation as nav
-from utils.browser import browser_session, testsetup
+from cfme.base import Server
+from cfme.utils.appliance.implementations.ui import navigate_to
 
-with browser_session() as browser:
-    pg = nav.home_page_logged_in(testsetup)
-    embed()
+navigate_to(Server, 'Dashboard')
+embed()

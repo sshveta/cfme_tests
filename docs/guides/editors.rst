@@ -5,7 +5,8 @@ Sublime
 -------
 
 The "supported" editor of choice for working on this project is
-`Sublime Text 2 <http://www.sublimetext.com>`_ (sublime). Of course you're free to use whichever
+`Sublime Text 2 <http://www.sublimetext.com>`_ (sublime), though these instructions will likely
+also work for Sublime Text 3. Of course you're free to use whichever
 editor helps you be the most productive, but the preponderance of Sublime users on the team
 make it the most useful target for our development environment setup documentation.
 
@@ -50,9 +51,9 @@ Package Control
 """""""""""""""
 
 Once sublime is up and running, we'll need to install some package management, which we'll be
-using hereafter to bring in sublime extensions. Follow the installation instructions
-`here <https://sublime.wbond.net/installation#st2>`_. Be sure to follow the instructions for
-Sublime Text 2, not Sublime Text 3.
+using hereafter to bring in sublime extensions. Follow the
+`installation instructions <https://sublime.wbond.net/installation#st2>`_.
+Be sure to follow the instructions for Sublime Text 2, unless you're beta testing Sublime Text 3.
 
 .. note:: When installing packages, it is sometimes necessary to restart sublime for the
    installed packages to initialize. For simplicity, it is probably easiest to restart sublime
@@ -126,25 +127,135 @@ Trailing Spaces
 Using Package Control, install the "Trailing Spaces" plugin. This highlights trailing spaces
 so you can clean them up before flake8 sees them.
 
-Sublime 3?
-^^^^^^^^^^
+Sublime Text 3
+--------------
 
-Sublime Text 3 is currently in beta, and (like all other editors/IDEs) not currently supported
-by this project.
+Sublime Text 3 is currently in beta, but it is perfectly usable for python development. I will show
+you my setup here (``mfalesni``). Prerequisities are the same as for ST2 (Package Control).
+
+Recommended Extensions and Settings
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+SublimePythonIDE
+""""""""""""""""
+It is a rewrite of SublimeRope for ST3. It is both Python Autocompletion and PEP8 checker.
+Install it from package manager the same way is described in chapter about ST2.
+
+After installation, go to ``Preferences -> Package Settings -> SublimePythonIDE -> User`` and insert
+this code:
+
+.. code-block:: json
+
+   {
+      "open_pydoc_in_view": true,
+      "create_view_in_same_group": false,
+
+      "python_linting": true,
+      "python_linter_mark_style": "outline",
+      "python_linter_gutter_marks": true,
+      "python_linter_gutter_marks_theme": "alpha",
+      "pep8": true,
+      "pep8_ignore": ["E128"],
+      "pep8_max_line_length": 100,
+      "pyflakes_ignore": []
+   }
+
+For the project file (``Project -> Edit Project``), use this code:
+
+.. code-block:: json
+
+   {
+     "folders":
+     [
+       {
+         "follow_symlinks": true,
+         "path": "/home/mfalesni/sublime-workspace/cfme_tests",
+       },
+
+       {
+         "follow_symlinks": true,
+         "path": "/home/mfalesni/sublime-workspace/whatever_else_directory_you_need",
+       },
+     ],
+
+     "settings":
+     {
+       "python_interpreter": "/home/mfalesni/sublime-workspace/.cfme_tests_ve/bin/python",
+       "tab_size": 4,
+     },
+   }
+
+
+Of course, replace the paths according to your setup. ``python_interpreter`` is the path for your
+virtualenv python.
+
+From now, Sublime will know about all modules that are in virtualenv/cfme_tests namespace.
+
+When you right-click a symbol, you can view a documentation, or jump to the symbol definition.
+
+GitGutter
+"""""""""
+Very good plugin, showing you lines that are added/modified/removed in your git repository in form
+of marks on left side of the editor window. (first suggested by jkrocil)
+
+BracketHighlighter
+""""""""""""""""""
+Simple plugin that shows you location of brackets, parenthesis and others that you are in on left
+side of editor window.
+
+Neon color scheme
+"""""""""""""""""
+You might find default colour theme a bit humdrum. I use Neon color scheme, which uses more colours
+and the colouring depends on the context so one has better view on the situation.
+
+To install, simply install ``Neon Color Scheme`` package. Then open ``Preferences -> Settings - User``
+and add this entry ``"color_scheme": "Packages/Neon Color Scheme/Neon.tmTheme"`` to the conf dict.
+
+Python Improved
+"""""""""""""""""
+Together with Neon, this package makes python source code better readable. Install with package
+manager ``C-P -> Install Package -> Python Improved``. Then after installation, open whatever
+python source file you like, click ``View -> Syntax -> Open all with current extension as ...`` and
+select PythonImproved.
+
 
 emacs
 -----
 
-So far the best emacs setup I've found is iPython notebook, combined with the
-`ein <http://tkf.github.io/emacs-ipython-notebook/>`_ emacs package (emacs iPython notebook).
+So far the best emacs setup I've (``jweiss``) found is iPython notebook, combined with the `ein
+<http://tkf.github.io/emacs-ipython-notebook/>`_ emacs package (emacs iPython notebook).
 
-Installing iPython is covered on its `homepage <http://ipython.org/install.html>`_.
+Installing iPython and its Emacs client
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You can run ``M-x package-install`` `ein` in emacs to install ein (if you have the right
-repositories set up - check out `Melpa <http://melpa.milkbox.net/#/>`_)
+iPython 
+"""""""
 
-Then in a shell somewhere, you can start up iPython notebook process.  This is the python
-process that will intepret all the code you will be sending it.
+See the install `docs <http://ipython.org/install.html>`_.
+
+ein
+"""
+
+`Emacs iPython Notebook <http://tkf.github.io/emacs-ipython-notebook/>`_ is the emacs client for
+iPython.
+
+The official ein package does not work with the latest ipython. I built a package from the `fork
+<https://github.com/millejoh/emacs-ipython-notebook>`_ of ein that does work.  You can get the
+package from the internal repository listed below.  You should also add the `Melpa
+<http://melpa.milkbox.net/#/>`_ repository.
+
+
+.. code-block:: cl
+
+ (add-to-list 'package-archives
+   '("melpa" . "http://melpa.milkbox.net/packages/") t)
+ (add-to-list 'package-archives
+   '("jweiss" . "http://qeblade5.rhq.lab.eng.bos/isos/emacs-package-archive/") t)
+
+You can then run ``M-x package-install``, ``ein`` in emacs to install ein.
+
+Then in a shell somewhere, you can start up iPython notebook process.  This is the python process
+that will intepret all the code you will be sending it.
 
 .. code-block:: bash
 
@@ -154,29 +265,34 @@ process that will intepret all the code you will be sending it.
 
 Then in emacs, run ``M-x ein:notebooklist-open``.  It will prompt you for a port (default 8888).
 This will bring up the EIN environment, where you can evaluate python snippets (and edit them and
-evaluate them again).  You can also save the notebook to use your snippets again later.  The
-outputs are also saved.
+evaluate them again).  You can also save the notebook to use your snippets again later.  The outputs
+are also saved.
 
-I wrote a little bit of elisp to start a iPython notebook process for you from within emacs.
-It's a little rough but easier than having to type shell commands every time.  It requires
-the ``magit`` package, which I highly recommend (it is a git client for emacs).
+Starting iPython from within Emacs
+""""""""""""""""""""""""""""""""""
+
+I wrote a little bit of elisp to start a iPython notebook process for you from within emacs.  It's
+easier than having to type shell commands every time.  It requires the ``magit`` package, which I
+highly recommend (it is a git client for emacs).
 
 .. code-block:: cl
 
    (autoload 'magit-get-top-dir "magit" nil t)
+
    (defun magit-project-dir ()
      (magit-get-top-dir (file-name-directory (or (buffer-file-name) default-directory))))
 
    (defun start-ipython-current-project (virtualenv-dir)
-    (interactive "DVirtualenv dir: ")
-
-   (save-excursion
-     (let ((buf (get-buffer-create
-                (generate-new-buffer-name (file-name-nondirectory
-                                           (directory-file-name (file-name-directory (magit-project-dir))))))))
-      (shell buf)
-      (process-send-string buf (format ". %s/bin/activate\n" virtualenv-dir))
-      (process-send-string buf (format "cd %s;ipython notebook\n" (magit-project-dir))))))
+     (interactive
+      (let ((d (read-directory-name "VirtualEnv dir: " "~/.virtualenvs/" nil t)))
+        (list d)))
+     (save-excursion
+       (let ((buf (get-buffer-create
+                   (generate-new-buffer-name (file-name-nondirectory
+                                              (directory-file-name (file-name-directory (magit-project-dir))))))))
+         (shell buf)
+         (process-send-string buf (format ". %s/bin/activate\n" virtualenv-dir))
+         (process-send-string buf (format "cd %s;ipython notebook\n" (magit-project-dir))))))
 
 
 To use the above snippet,
@@ -187,3 +303,131 @@ To use the above snippet,
 
 It will start ipython in emacs' shell buffer.
 
+Autosave Notebooks
+""""""""""""""""""
+
+Unlike the iPython web interface, ein does not autosave notebooks by default.  Here is a snippet
+that will enable autosave (notebooks are saved every time you execute a cell)
+
+.. code-block:: cl
+
+  ;; ein save worksheet after running cell
+  (eval-after-load 'ein-multilang
+    '(defadvice ein:cell-execute (after ein:save-worksheet-after-execute activate)
+       (ein:notebook-save-notebook-command)))
+
+
+Flake8 Lint
+^^^^^^^^^^^
+
+Flycheck is recommended because it highlights the column where the problem occurs instead of just the line.
+
+Run ``M-x package-install``, ``flycheck``, and see the `Flycheck homepage <https://github.com/flycheck/flycheck>`_.
+
+You can use the global mode as described on the homepage, or to just enable flymake for python files
+
+.. code-block:: cl
+
+  (autoload 'flycheck "flycheck-mode")
+  (eval-after-load 'python
+    '(add-hook 'python-mode-hook 'flycheck-mode))
+
+Recommended
+^^^^^^^^^^^
+
+:Magit:
+
+   Emacs client for git and a huge time saver.  All git commands are a single keypress, pretty views
+   of diffs, branches, remotes, etc.  Package is ``magit``.
+
+:Ido and Smex:
+
+   ``ido`` package (now built into emacs) for filename and buffer name completion, ``smex`` for
+   ``M-x`` command completion.
+
+:Smartparens: 
+
+   Inserts parens, brackets, quotes, etc in pairs.  Keeps parens balanced, allows you to edit
+   paren-delimited structures logically instead of as plain text (designed for lisp but also works
+   on html, xml, json, etc).  Replaces paredit, an older and more well-known tool that does the same
+   thing.  Package ``smartparens``.
+
+:Autocomplete: 
+
+   Code completion for emacs.  Package is called ``autocomplete``, see ``ein`` docs for how to enable in
+   python buffers.
+
+:Undo Tree:
+
+   Edit with confidence! Keeps track of all your buffer changes, even stuff you undid and re-did on
+   top of.  Package is called ``undo-tree``.
+
+:yagist:
+   
+   Create a github gist (paste) from a region or buffer with a single keypress, and the link to the
+   gist is automatically inserted into the clipboard so you can easily paste it into IRC.
+
+:Multiple cursors:
+
+   Extremely powerful editing tool, best described with `this
+   video. <http://emacsrocks.com/e13.html>`_ Package is ``multiple-cursors``.
+
+PyCharm
+-------
+
+PyCharm is a very powerful python IDE. However, it comes with a price - it's also quite resource-heavy.
+It has a `community edition <https://blog.jetbrains.com/pycharm/2013/10/pycharm-3-0-community-edition-source-code-now-available/>`_
+that is open-source since 2013. You can get it `here <https://www.jetbrains.com/pycharm/download/>`_.
+Some of its best out-of-the-box features are:
+
+- Code inspections with PEP8 support
+- Git integration with diff preview and other tools
+- Easy per-project configuration including code style
+- Symbol navigation and code completion
+- Support for html, json, xml and yaml
+- Powerful degugging tool
+- Many others
+
+Following examples and settings were tested on PyCharm Community Edition 2017.2.3
+
+Useful plugins
+^^^^^^^^^^^^^^
+
+PyCharm has a library of many useful plugins. To install them, go to
+``File -> Settings -> Plugins -> Install JetBrains plugin``.
+
+Some plugins you might find useful are:
+
+:BashSupport:
+
+        Supports syntax highlighting, rename refactoring, inspections and many more.
+
+:IdeaVim:
+
+        Very good Vim emulation. If you have been using Vim for some time, you will feel at home.
+
+Code style compliance
+^^^^^^^^^^^^^^^^^^^^^
+
+You can set up PyCharm in such a way that it takes care about code style for you.
+You can go very much in-depth with this, but here are the basics of whay you can do:
+
+:100 characters maximum line length:
+
+        Set ``File -> Settings -> Editor -> Code Style -> Right margin (columns)`` to 100
+
+:PEP 8 revisions:
+
+        Add ``E128`` to ``File -> Settigns -> Editor -> Inspections -> Python -> PEP 8 coding style violation -> Ignore errors``
+
+:Problems with pytest fixtures:
+
+        PyCharm is unfortunately ignorant of pytest inner workings.
+        It means that it will mark fixtures passed to test methods as ununsed parameters.
+        In order to get rid of those warnings, you can disable following inspection:
+        ``File -> Settigns -> Editor -> Inspections -> Python -> Unused local``
+        If a fixture is specified in the same module as your test method, you will get other warning when using it.
+        Disable ``File -> Settigns -> Editor -> Inspections -> Python -> Shadowing names from outer scopes``.
+
+
+Feel free to add any other tips & tricks you come up with.

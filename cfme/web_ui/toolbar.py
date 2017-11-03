@@ -10,6 +10,16 @@ Usage:
 """
 import cfme.fixtures.pytest_selenium as sel
 from selenium.webdriver.common.by import By
+from cfme.exceptions import ToolbarOptionGreyedOrUnavailable
+from cfme.utils import version
+from cfme.utils.log import logger
+from xml.sax.saxutils import quoteattr, unescape
+
+
+def xpath_quote(x):
+    """Putting strings in xpath requires unescape also"""
+    # TODO: Move it to some library!
+    return unescape(quoteattr(x))
 
 
 def root_loc(root):
@@ -20,7 +30,14 @@ def root_loc(root):
     Returns: A locator for the root button.
     """
     return (By.XPATH,
-        "//div[contains(@class, 'dhx_toolbar_btn')][contains(@title, '%s')]" % root)
+            ("//div[contains(@class, 'dhx_toolbar_btn')][contains(@title, {0})] | "
+             "//div[contains(@class, 'dhx_toolbar_btn')][contains(@data-original-title, {0})] | "
+             "//button[normalize-space(.) = {0}] |"
+             "//button[@data-original-title = {0}] |"
+             "//a[@data-original-title = {0}]/.. |"
+             "//a[@title = {0}]/.. |"
+             "//button[@title = {0}]")
+            .format(xpath_quote(root)))
 
 
 def sub_loc(sub):
@@ -30,7 +47,11 @@ def sub_loc(sub):
         sub: The string name of the button.
     Returns: A locator for the sub button.
     """
-    return (By.XPATH, "//div[contains(@class, 'btn_sel_text')][contains(., '%s')]/../.." % sub)
+    return (
+        By.XPATH,
+        ("//div[contains(@class, 'btn_sel_text')][normalize-space(text()) = {0}]/../.. |"
+         "//ul[contains(@class, 'dropdown-menu')]//li[normalize-space(.) = {0}]").format(
+            xpath_quote(sub)))
 
 
 def select_n_move(el):
@@ -45,11 +66,19 @@ def select_n_move(el):
     """
     # .. if we don't move the "mouse" the button stays active
     sel.click(el)
-    sel.move_to_element((By.XPATH, '//div[@class="brand"]'))
+    sel.move_to_element(".navbar-brand")
 
 
-def select(root, sub=None, invokes_alert=False):
-    """ Clicks on a button by calling the :py:meth:`click_n_move` method.
+def select(*args, **kwargs):
+    logger.debug('Selecting %r', args)
+    if version.current_version() > '5.5.0.7':
+        return pf_select(*args, **kwargs)
+    else:
+        return old_select(*args, **kwargs)
+
+
+def pf_select(root, sub=None, invokes_alert=False):
+    """ Clicks on a button by calling the click event with the jquery trigger.
 
     Args:
         root: The root button's name as a string.
@@ -57,25 +86,97 @@ def select(root, sub=None, invokes_alert=False):
         invokes_alert: If ``True``, then the behaviour is little bit different. After the last
             click, no ajax wait and no move away is done to be able to operate the alert that
             appears after click afterwards. Defaults to ``False``.
-    Returns: ``True`` if the button was enabled at time of clicking, ``False`` if not.
+    Returns: ``True`` if everything went smoothly
+    Raises: :py:class:`cfme.exceptions.ToolbarOptionGreyedOrUnavailable`
     """
-    if not is_greyed(root):
-        if sub is None and invokes_alert:
-            # We arrived into a place where alert will pop up so no moving and no ajax
-            sel.click(root_loc(root), wait_ajax=False)
-        else:
-            select_n_move(root_loc(root))
-    else:
-        return False
+
+    sel.wait_for_ajax()
+    if isinstance(root, dict):
+        root = version.pick(root)
+    if isinstance(sub, dict):
+        sub = version.pick(sub)
+
     if sub:
-        if not is_greyed(root, sub):
-            if invokes_alert:
-                # We arrived into a place where alert will pop up so no moving and no ajax
-                sel.click(sub_loc(sub), wait_ajax=False)
-            else:
-                select_n_move(sub_loc(sub))
-        else:
-            return False
+        q_sub = xpath_quote(sub).replace("'", "\\'")
+        sel.execute_script(
+            "return $('a:contains({})').trigger('click')".format(q_sub))
+    else:
+        q_root = xpath_quote(root).replace("'", "\\'")
+        try:
+            sel.element("//button[@data-original-title = {0}] | "
+                        "//a[@data-original-title = {0}]".format(q_root))
+            sel.execute_script(
+                "return $('*[data-original-title={}]').trigger('click')".format(q_root))
+        except sel.NoSuchElementException:
+            try:
+                sel.element("//button[@title={}]".format(q_root))
+                sel.execute_script(
+                    "return $('button[title={}]').trigger('click')".format(q_root))
+            except sel.NoSuchElementException:
+                try:
+                    sel.element("//button[contains(@title, {})]".format(q_root))
+                    sel.execute_script(
+                        "return $('button:contains({})').trigger('click')".format(q_root))
+                except sel.NoSuchElementException:
+                    # The view selection buttons?
+                    sel.click("//li/a[@title={}]/*[self::i or self::img]/../..".format(q_root))
+
+    if not invokes_alert:
+        sel.wait_for_ajax()
+    return True
+
+
+def old_select(root, sub=None, invokes_alert=False):
+    """ Clicks on a button by calling the dhtmlx toolbar callEvent.
+
+    Args:
+        root: The root button's name as a string.
+        sub: The sub button's name as a string. (optional)
+        invokes_alert: If ``True``, then the behaviour is little bit different. After the last
+            click, no ajax wait and no move away is done to be able to operate the alert that
+            appears after click afterwards. Defaults to ``False``.
+    Returns: ``True`` if everything went smoothly
+    Raises: :py:class:`cfme.exceptions.ToolbarOptionGreyedOrUnavailable`
+    """
+    # wait for ajax on select to prevent pickup up a toolbar button in the middle of a page change
+    sel.wait_for_ajax()
+    if isinstance(root, dict):
+        root = version.pick(root)
+    if sub is not None and isinstance(sub, dict):
+        sub = version.pick(sub)
+
+    root_obj = 'ManageIQ.toolbars'
+
+    if sub:
+        search = sub_loc(sub)
+    else:
+        search = root_loc(root)
+
+    eles = sel.elements(search)
+
+    for ele in eles:
+        idd = sel.get_attribute(ele, 'idd')
+        if idd:
+            break
+    else:
+        raise ToolbarOptionGreyedOrUnavailable(
+            "Toolbar button {}/{} is greyed or unavailable!".format(root, sub))
+
+    buttons = sel.execute_script('return {}'.format(root_obj))
+    tb_name = None
+    for tb_key, tb_obj in buttons.iteritems():
+        for btn_key, btn_obj in tb_obj['buttons'].iteritems():
+            if btn_obj['name'] == idd:
+                tb_name = tb_key
+    if not tb_name:
+        raise ToolbarOptionGreyedOrUnavailable(
+            "Toolbar button {}/{} is greyed or unavailable!".format(root, sub))
+
+    sel.execute_script(
+        "{}['{}']['obj'].callEvent('onClick', ['{}'])".format(root_obj, tb_name, idd))
+
+    if not invokes_alert:
+        sel.wait_for_ajax()
     return True
 
 
@@ -88,7 +189,7 @@ def is_active(root):
     """
     el = sel.element(root_loc(root))
     class_att = sel.get_attribute(el, 'class').split(" ")
-    if "over" in class_att:
+    if {"pres", "active", "pres_dis"}.intersection(set(class_att)):
         return True
     else:
         return False
@@ -108,11 +209,57 @@ def is_greyed(root, sub=None):
 
     el = sel.element(btn)
     class_att = sel.get_attribute(el, 'class').split(" ")
-
     if sub:
-        if "tr_btn_disabled" in class_att:
+        if {"tr_btn_disabled", "disabled"}.intersection(set(class_att)):
+            logger.debug("%s option greyed out, mouseover reason: %s",
+                sub, sel.get_attribute(el, 'title'))
             return True
     else:
-        if "dis" in class_att:
+        if {"disabled", "dis"}.intersection(set(class_att)):
             return True
     return False
+
+
+RELOAD_LOC = (
+    ".//div[@title='Reload current display']|"
+    ".//button[@title='Reload Current Display' or "
+    "@title='Reload current display' or "
+    "@id='miq_request_reload']"
+)
+
+
+def refresh():
+    """Refreshes page, attempts to use cfme refresh button otherwise falls back to browser refresh.
+    """
+    if sel.is_displayed(RELOAD_LOC):
+        sel.click(RELOAD_LOC)
+    else:
+        sel.refresh()
+
+
+def exists(root, sub=None, and_is_not_greyed=False):
+    """ Checks presence and usability of toolbar buttons.
+
+    By default it checks whether the button is available, not caring whether it is greyed or not.
+    You can optionally enable check for greyedness.
+
+    Args:
+        root: Button name.
+        sub: Item name (optional)
+        and_is_not_greyed: Check if the button is available to click.
+
+    """
+    sel.wait_for_ajax()
+    if isinstance(root, dict):
+        root = version.pick(root)
+    if isinstance(sub, dict):
+        sub = version.pick(sub)
+
+    try:
+        greyed = is_greyed(root, sub)
+        if and_is_not_greyed:
+            return not greyed
+        else:
+            return True
+    except sel.NoSuchElementException:
+        return False

@@ -1,67 +1,42 @@
-#!/usr/bin/env python
-
+#!/usr/bin/env python2
+# -*- coding: utf-8 -*-
 """SSH into a running appliance and install Netapp SDK
 """
 
 import argparse
-import sys
-import os
-from utils.conf import credentials
-from utils.ssh import SSHClient
+from cfme.utils.appliance import IPAppliance, get_or_create_current_appliance
+from cfme.utils.conf import cfme_data
+
+
+def log(s):
+    print(s)
 
 
 def main():
     parser = argparse.ArgumentParser(epilog=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('address', help='hostname or ip address of target appliance')
-    parser.add_argument('sdk_url', help='url to download sdk pkg')
+    parser.add_argument(
+        '--address',
+        help='hostname or ip address of target appliance',
+        default=None)
+    parser.add_argument(
+        '--sdk_url',
+        help='url to download sdk pkg',
+        default=cfme_data.get("basic_info", {}).get("netapp_sdk_url"))
     parser.add_argument('--restart', help='restart evmserverd after installation ' +
         '(required for proper operation)', action="store_true")
 
     args = parser.parse_args()
-
-    ssh_kwargs = {
-        'username': credentials['ssh']['username'],
-        'password': credentials['ssh']['password'],
-        'hostname': args.address
-    }
-
-    # Init SSH client
-    client = SSHClient(**ssh_kwargs)
-
-    # start
-    filename = args.sdk_url.split('/')[-1]
-    foldername = os.path.splitext(filename)[0]
-
-    # download
-    print 'Downloading sdk'
-    status, out = client.run_command('curl %(url)s -o %(file)s > /root/unzip.out 2>&1' %
-        {'url': args.sdk_url, 'file': filename})
-
-    # extract
-    print 'Extracting sdk (' + filename + ')'
-    status, out = client.run_command('unzip -o -f -d /var/www/miq/vmdb/lib/ %s' % filename)
-    if status != 0:
-        print out
-        sys.exit(1)
-
-    # install
-    print 'Installing sdk (' + foldername + ')'
-    status, out = client.run_command('echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:' +
-        '/var/www/miq/vmdb/lib/' + foldername + '/lib/linux-64" >> /etc/default/evm')
-    if status != 0:
-        print 'SDK installation failure (rc:' + out + ')'
-        print out
-        sys.exit(1)
-
-    # service evmserverd restart
-    if args.restart:
-        print 'Appliance restart'
-        status, out = client.run_command('service evmserverd restart')
-        print 'evmserverd restarted, the UI should start shortly.'
+    if not args.address:
+        appliance = get_or_create_current_appliance()
     else:
-        print 'evmserverd must be restarted before netapp sdk can be used'
+        appliance = IPAppliance(address=args.address)
+    print('Address: {}'.format(appliance.address))
+    print('SDK URL: {}'.format(args.sdk_url))
+    print('Restart: {}'.format(args.restart))
+
+    appliance.install_netapp_sdk(sdk_url=args.sdk_url, reboot=args.restart, log_callback=log)
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()

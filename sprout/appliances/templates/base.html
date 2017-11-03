@@ -1,0 +1,140 @@
+{% load staticfiles %}
+<!--[if IE 8]><html class="ie8"><![endif]-->
+<!--[if IE 9]><html class="ie9"><![endif]-->
+<!--[if gt IE 9]><!-->
+<html lang="en">
+<!--<![endif]-->
+
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/patternfly/3.25.1/css/patternfly.min.css" integrity="sha256-X3xeZWyYqd2e5+GoMUoDSha0XjM5yTVlDT+fw6xlJo0=" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/patternfly/3.25.1/css/patternfly-additions.min.css" integrity="sha256-GfnHWbtMVpgyK1cOqQLVA6nuh/0Fd+0Lvfbio0v+LMA=" crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-select/1.12.4/css/bootstrap-select.css" integrity="sha256-QSzwHCXHzNEyLi4QyGZzTAQHJhiRzSzT0umfo9OCR10=" crossorigin="anonymous" />
+  <link rel="stylesheet" href="{% static 'custom.css' %}"/>
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv.min.js" integrity="sha256-3Jy/GbSLrg0o9y5Z5n1uw0qxZECH7C6OQpVBgNFYa0g=" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js" integrity="sha256-hwg4gsxgFZhOsEEamdOYGBf13FyQuiTwlAQgxVSNgt4=" crossorigin="anonymous"></script>
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha256-U5ZEeKfGNOja007MMD3YBI0A3OSZOQbeG6z2f2Y0hu8=" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/patternfly/3.25.1/js/patternfly.min.js" integrity="sha256-G6RxRcFrumWikPwYJ7mNi94b3rJnpKFpVynL00RlS1o=" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-select/1.12.4/js/bootstrap-select.min.js" integrity="sha256-19J3rT3tQdidgtqqdQ3xNu++Gd7EoP/ag/0x1lHi0xY=" crossorigin="anonymous"></script>
+  <script src={% static "app-js/base.js" %}></script>
+  {% block additional_js %}{% endblock %}
+  {% block additional_css %}{% endblock %}
+  <style type="text/css">{% block custom-style %}{% endblock %}</style>
+  <title>Sprout: {% block title %}{% endblock %}</title>
+</head>
+
+<body>
+  <nav class="navbar navbar-inverse navbar-pf" role="navigation">
+    <div class="navbar-header">
+      <img src={% static "img/brand.svg" %} class="navbar-brand">
+    </div>
+    <div class="collapse navbar-collapse navbar-collapse-21">
+      <ul class="nav navbar-nav navbar-primary">
+        <li id="home">
+        
+        <a href="{% url 'index' %}"><span class="glyphicon glyphicon-home"></span></a>
+        </li>
+        <li id="api">
+          <a href="{% url 'jsonapi_doc' %}">API Reference</a>
+        </li>
+        {% if user.is_authenticated %}
+            <li id="bugs">
+              <a href="{% url 'view_bug_queries' %}">Bugs</a>
+            </li>
+            <li id="providers">
+              <a href="{% url 'providers' %}">Providers</a>
+            </li>
+            <li id="provider_usage">
+              <a href="{% url 'provider_usage' %}">Provider usage</a>
+            </li>
+            <li id="templates">
+              <a href="{% url 'templates' %}">Templates</a>
+            </li>
+            <li id="swap_offenders">
+              <a href="{% url 'swap_offenders' %}">Swap</a>
+            </li>
+            <li id="appliances">
+              <a href="{% url 'my_appliances' %}">My Appliances</a>
+            </li>
+            <li id="shepherd">
+              <a href="{% url 'shepherd' %}">Free appliance shepherd</a>
+            </li>
+        {% endif %}
+        {% if user.is_staff or user.is_superuser %}
+            <li id="vms">
+              <a href="{% url 'vms_default' %}">VM Manager</a>
+            </li>
+            <li id="admin">
+              <a href="{% url 'admin:index' %}">Admin page</a>
+            </li>
+        {% endif %}
+        </ul>
+        <ul class="nav navbar-nav navbar-utility">
+            {% if sprout_needs_update %}
+            <li>
+                <a href="#" title="Update needed" style="color: #333;">Update needed!</a>
+            </li>
+            {% else %}
+            <li>
+                <a href="#" title="Up-to-date" style="color: #00FF00;">Up-to-date</a>
+            </li>
+            {% endif %}
+            {% if hubber_url %}
+            <li>
+                <a href="{{ hubber_url }}" title="Go to Hubber" style="color: #333;">Go to Hubber</a>
+            </li>
+            {% endif %}
+            {% if user.is_authenticated %}
+                <li>
+                  <a href='#' style="color: #333;">
+                  {% for user_group in user.groups.all %}
+                    {{ user_group.name }}{% if not forloop.last %} | {% endif %}
+                  {% empty %}
+                    No groups assigned.
+                  {% endfor %}
+                  </a>
+                </li>
+                <li>
+                    <a href="{% url 'password_change' %}?next={{request.path}}" title="Change password" style="color: #333;">Change password</a>
+                </li>
+                <li>
+                    <a href="{% url 'logout' %}" title="Logout" style="color: #333;">Logout, {{ user|user_repr }}</a>
+                </li>
+            {% else %}
+                <li>
+                    <a href="{% url 'login' %}?next={{request.path}}" title="Login" style="color: #333;">Login</a>
+                </li>
+            {% endif %}
+      </ul>
+    </div>
+  </nav>
+  <p></p>
+  <div class="container-fluid">
+  <div id="alerts">
+    {% if messages %}
+        {% for message in messages %}
+            <div class='alert {% if message.tags %}alert-{{ message.tags|alert_type }}{% endif %} alert-dismissible fade in'>
+                <button class="close" data-dismiss="alert">×</button>
+                {{ message }}
+                {% if "success" in message.tags %}
+                    <span class="pficon pficon-ok"></span>
+                {% elif "info" in message.tags %}
+                    <span class="pficon pficon-info"></span>
+                {% elif "warning" in message.tags or "error" in message.tags %}
+                    <span class="pficon-layered">
+                      <span class="pficon pficon-warning-triangle"></span>
+                      <span class="pficon pficon-warning-exclamation"></span>
+                    </span>
+                {% endif %}
+            </div>
+        {% endfor %}
+      {% endif %}
+    </div>
+    {% block body %}{% endblock %}
+  </div>
+  {% block body-script %}
+  {% endblock %}
+</body>
+</html>

@@ -1,50 +1,53 @@
 """A set of functions for dealing with the paginator controls."""
-from cfme.web_ui import Select
-import cfme.fixtures.pytest_selenium as sel
-import re
+from cfme.exceptions import PaginatorException
+from widgetastic_manageiq import PaginationPane
+from cfme.utils.appliance import get_or_create_current_appliance
 
-_locator = '(//div[@id="paging_div"] | //div[@id="records_div"])'
-_next = '//img[@alt="Next"]'
-_previous = '//img[@alt="Previous"]'
-_first = '//img[@alt="First"]'
-_last = '//img[@alt="Last"]'
-_num_results = '//select[@id="ppsetting" or @id="perpage_setting1"]'
-_sort_by = '//select[@id="sort_choice"]'
-_page_cell = '//td//td[contains(., " of ")]'
-_check_all = '//input[@id="masterToggle"]'
+
+def new_paginator():
+    """ Simple function to avoid module level import """
+    appliance = get_or_create_current_appliance()
+    paginator = PaginationPane(parent=appliance.browser.widgetastic)
+    return paginator
+
+
+def page_controls_exist():
+    """ Simple check to see if page controls exist. """
+    return new_paginator().is_displayed
 
 
 def _page_nums():
-    return sel.element(_locator + _page_cell).text
+    return new_paginator().pages_amount
 
 
 def check_all():
-    """ Returns the Check All locator."""
-    return sel.element(_locator + _check_all)
+    """ selects all items """
+    new_paginator().check_all()
+
+
+def uncheck_all():
+    """ unselects all items """
+    new_paginator().uncheck_all()
 
 
 def next():
     """ Returns the Next button locator."""
-    btn = sel.element(_locator + _next)
-    return btn
+    new_paginator().next_page()
 
 
 def previous():
     """ Returns the Previous button locator."""
-    btn = sel.element(_locator + _previous)
-    return btn
+    new_paginator().prev_page()
 
 
 def first():
     """ Returns the First button locator."""
-    btn = sel.element(_locator + _first)
-    return btn
+    new_paginator().first_page()
 
 
 def last():
     """ Returns the Last button locator."""
-    btn = sel.element(_locator + _last)
-    return btn
+    new_paginator().last_page()
 
 
 def results_per_page(num):
@@ -53,8 +56,7 @@ def results_per_page(num):
     Args:
         num: Number of results per page
     """
-    select = sel.element(_locator + _num_results)
-    sel.select(Select(select), (sel.TEXT, str(num)))
+    new_paginator().set_items_per_page(num)
 
 
 def sort_by(sort):
@@ -63,38 +65,30 @@ def sort_by(sort):
     Args:
         sort: Value to sort by (visible text in select box)
     """
-    select = sel.element(_locator + _sort_by)
-    sel.select(Select(select), (sel.TEXT, sort))
+    new_paginator().sort(sort)
 
 
 def rec_offset():
     """ Returns the first record offset."""
-    offset = re.search('\((Item|Items)*\s*(\d+)', _page_nums())
-    return offset.groups()[1]
+    try:
+        return int(new_paginator().paginator.page_info()[0])
+    except TypeError:
+            raise PaginatorException()
 
 
 def rec_end():
     """ Returns the record set index."""
-    offset = re.search('-(\d+)', _page_nums())
-    if offset:
-        return offset.groups()[0]
-    else:
-        return rec_total()
+    return new_paginator().paginator.page_info()[1]
 
 
 def rec_total():
     """ Returns the total number of records."""
-    offset = re.search('(\d+)\)', _page_nums())
-    if offset:
-        return offset.groups()[0]
-    else:
-        return None
+    return new_paginator().items_amount
 
 
 def reset():
     """Reset the paginator to the first page or do nothing if no pages"""
-    if 'dimmed' not in first().get_attribute('class'):
-        sel.click(first())
+    new_paginator().first_page()
 
 
 def pages():
@@ -102,14 +96,10 @@ def pages():
 
     Usage:
 
-        for page in pages:
+        for page in pages():
             # Do seleniumy things here, like finding and clicking elements
 
+    Raises:
+        :py:class:`ValueError`: When the paginator "breaks" (does not change)
     """
-    # Reset the paginator, then yield the first page
-    reset()
-    yield
-    # Yield while there are more pages
-    while 'dimmed' not in next().get_attribute('class'):
-        sel.click(next())
-        yield
+    return new_paginator().pages()
