@@ -8,13 +8,12 @@ from cfme.containers.overview import ContainersOverviewView
 from cfme.containers.node import NodeAllView
 from cfme.containers.pod import PodAllView
 from cfme.containers.service import ServiceAllView
-from cfme.containers.provider import ContainersProvider, ContainersProvidersView
+from cfme.containers.provider import ContainersProvider, ContainerProvidersView
 from cfme.containers.project import ProjectAllView
 from cfme.containers.image_registry import ImageRegistryAllView
 from cfme.containers.template import TemplateAllView
 from cfme.containers.replicator import ReplicatorAllView
 from cfme.containers.route import RouteAllView
-from cfme.containers.volume import VolumeAllView
 from cfme.utils.appliance.implementations.ui import navigate_to
 from cfme.utils.version import current_version
 
@@ -29,7 +28,7 @@ pytestmark = [
 DataSet = namedtuple('DataSet', ['obj_view', 'page_name'])
 data_sets = (
     DataSet(ContainersOverviewView, 'Compute / Containers / Overview'),
-    DataSet(ContainersProvidersView, 'Compute / Containers / Providers'),
+    DataSet(ContainerProvidersView, 'Compute / Containers / Providers'),
     DataSet(NodeAllView, 'Compute / Containers / Container Nodes'),
     DataSet(PodAllView, 'Compute / Containers / Pods'),
     DataSet(ServiceAllView, 'Compute / Containers / Container Services'),
@@ -38,7 +37,9 @@ data_sets = (
     DataSet(TemplateAllView, 'Compute / Containers / Container Templates'),
     DataSet(ReplicatorAllView, 'Compute / Containers / Replicators'),
     DataSet(RouteAllView, 'Compute / Containers / Routes'),
-    DataSet(VolumeAllView, 'Compute / Containers / Volumes'),
+    # https://bugzilla.redhat.com/show_bug.cgi?id=1510376
+    # from cfme.containers.volume import VolumeAllView
+    #  DataSet(VolumeAllView, 'Compute / Containers / Volumes'),
     # https://bugzilla.redhat.com/show_bug.cgi?id=1466350
     # from cfme.containers.container import ContainerAllView
     # DataSet(ContainerAllView, 'Compute / Containers / Containers')
