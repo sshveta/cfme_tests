@@ -72,7 +72,7 @@ class MigrationThrottlingForm(View):
 
 class ConversionHostForm(View):
     configure_conversion_host = Text(locator='(//a|//button)[text()="Configure Conversion Host"]')
-    conversion_host_progress = ConversionHostProgress()
+    conv_host_progress = ConversionHostProgress()
 
 
 class MigrationSettingsView(BaseLoggedInPage):
@@ -115,7 +115,7 @@ class MigrationSettingsView(BaseLoggedInPage):
 
 class ConfigureConversionHostsView(View):
     title = Text(locator='.//h4[contains(@class,"modal-title")]')
-    conversion_host_progress = ConversionHostProgress()
+    conv_host_progress = ConversionHostProgress()
     fill_strategy = WaitFillViewStrategy("20s")
 
     next_btn = Button("Next")
@@ -225,12 +225,12 @@ class ConversionHost(BaseEntity):
         """Wait for conversion host to configure and return success/failure state"""
         view = navigate_to(self.parent, "All")
         try:
-            wait_for(view.conversion_host_progress.in_progress,
+            wait_for(view.tabs.conversion_hosts.conv_host_progress.in_progress,
                      func_args=[self.hostname],
                      fail_condition=True)
         except TimedOutError:
             self.logger.warning("Timed out waiting for {} to configure".format(self.hostname))
-        return view.conversion_host_progress.is_host_configured(self.hostname)
+        return view.tabs.conversion_hosts.conv_host_progress.is_host_configured(self.hostname)
 
 
 @attr.s
@@ -302,7 +302,7 @@ class ConversionHosts(CFMENavigateStep):
         else:
             self.prerequisite_view.navigation.select("Migration", "Migration Settings")
         self.view.tabs.conversion_hosts.click()
-        self.view.tabs.configure_conversion_host.wait_displayed()
+        self.view.tabs.conversion_hosts.configure_conversion_host.wait_displayed()
 
 
 @navigator.register(ConversionHostCollection, "Configure")
@@ -311,5 +311,5 @@ class ConfigureConversionHost(CFMENavigateStep):
     prerequisite = NavigateToSibling("All")
 
     def step(self):
-        self.prerequisite_view.configure_conversion_host.wait_displayed()
-        self.prerequisite_view.configure_conversion_host.click()
+        self.prerequisite_view.tabs.conversion_hosts.configure_conversion_host.wait_displayed()
+        self.prerequisite_view.tabs.conversion_hosts.configure_conversion_host.click()

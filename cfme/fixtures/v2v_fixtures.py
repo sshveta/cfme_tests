@@ -307,13 +307,12 @@ def __configure_conversion_host_ui(appliance, target_provider, hostname, default
         osp_cert_switch=osp_cert_switch,
         osp_ca_cert=osp_ca_cert
     )
-    if not conv_host.is_host_configured:
-        pytest.skip("Failed to set conversion host/instance: {}".format(hostname))
+    return conv_host
 
 
-def __set_conversion_instance_for_rhev_ui(appliance, source_provider,  # noqa
-                                          rhv_provider, rhev_hosts,
-                                          transformation_method):
+def set_conversion_host_for_rhev_ui(appliance, source_provider,  # noqa
+                                    rhv_provider,
+                                    transformation_method):
     """
     Args:
         appliance:
@@ -338,15 +337,17 @@ def __set_conversion_instance_for_rhev_ui(appliance, source_provider,  # noqa
     with open(temp_file.name, 'w') as f:
         f.write(__conversion_data(rhv_provider)["private_key"])
     conv_host_key = temp_file.name
-
+    rhev_hosts = [h.name for h in rhv_provider.hosts.all()]
     for host in rhev_hosts:
-        __configure_conversion_host_ui(appliance,
-                                       rhv_provider, host.name, "Default",
+        conv_host = __configure_conversion_host_ui(appliance,
+                                       rhv_provider, host, "Default",
                                        conv_host_key, transformation_method,
                                        vmware_ssh_key)
+        if not conv_host.is_host_configured:
+            pytest.skip("Failed to set conversion host/instance: {}".format(host))
 
 
-def __set_conversion_instance_for_osp_ui(appliance, source_provider,  # noqa
+def set_conversion_instance_for_osp_ui(appliance, source_provider,  # noqa
                                          osp_provider, transformation_method):
     """
     Args:
